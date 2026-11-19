@@ -10,3 +10,5 @@
 [Oo]bj/
 TestResults/
 *.log
+
+logs/
