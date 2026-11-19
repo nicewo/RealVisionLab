@@ -94,7 +94,6 @@ namespace RealVisionLab
 			rotuzunlukvisible = false,
 			gThrs = false,
 			qr = false,
-			uartResetAlreadyOpened = false;
 		public static bool[]
 			cam_var;
 		public static bool[,]
@@ -482,6 +481,115 @@ namespace RealVisionLab
 				UiLog(exception.ToString());
 			}
 		}
+		// T07: connect to the configured port with timeouts. Nothing is written unless Open() succeeded;
+		// no UI-thread sleep. UartPort empty = legacy behaviour (last COM port, with a log warning).
+		private void UartConnectCore()
+		{
+			if(Uart_to_IO.IsOpen)
+			{
+				// Already open: connect probe (0x00 = all outputs off); throws on failure -> caller logs.
+				uartPort.WriteConnectProbe();
+				port_text.Text = "Çıkış Cihazı Bağlandı (UART)";
+				port_text.ForeColor = grn;
+				return;
+			}
+
+			string[] ports = SerialPort.GetPortNames();
+			if(ports.Length == 0)
+			{
+				lbl_alarm.Text = "Cihaz bulunamadı";
+				lbl_alarm.ForeColor = red;
+				port_text.Text = "Çıkış Cihazı Bağlanamadı";
+				port_text.ForeColor = red;
+				TryLaunchUartResetTool("COM port yok");
+				return;
+			}
+
+			string portName;
+			string configured = (Settings.Default.UartPort ?? "").Trim();
+			if(configured.Length == 0)
+			{
+				portName = ports[ports.Length - 1];
+				UiLog("UART uyarı: UartPort ayarı boş, eski davranış: son COM port (" + portName + ") kullanılıyor.");
+			}
+			else
+			{
+				portName = ports.FirstOrDefault(x => string.Equals(x, configured, StringComparison.OrdinalIgnoreCase));
+				if(portName == null)
+				{
+					lbl_alarm.Text = "Cihaz bulunamadı";
+					lbl_alarm.ForeColor = red;
+					port_text.Text = "Çıkış Cihazı Bağlanamadı (" + configured + " yok)";
+					port_text.ForeColor = red;
+					return;
+				}
+			}
+
+			port_text.Text = "Çıkış Cihazı Bağlanamadı";
+			port_text.ForeColor = red;
+			lbl_alarm.Text = "Bağlanıyor...";
+			lbl_alarm.ForeColor = org;
+			Uart_to_IO.DataReceived -= Uart_to_IO_DataReceived;
+			Uart_to_IO.PortName = portName;
+			Uart_to_IO.BaudRate = Settings.Default.baud;
+			Uart_to_IO.ReadTimeout = 500;
+			Uart_to_IO.WriteTimeout = 500;
+
+			try
+			{
+				Uart_to_IO.Open();
+			}
+			catch(Exception ex)
+			{
+				// Disconnected: no probe/write, no handler attached.
+				UiLog("UART açılamadı (" + portName + "): " + ex.Message);
+				TryLaunchUartResetTool("Open() başarısız: " + portName);
+				return;
+			}
+
+			try
+			{
+				Uart_to_IO.DataReceived += Uart_to_IO_DataReceived;
+				uartPort.WriteConnectProbe();
+				port_text.Text = "Çıkış Cihazı Bağlandı";
+				port_text.ForeColor = grn;
+			}
+			catch(Exception ex)
+			{
+				UiLog("UART bağlantı yazımı başarısız (" + portName + "): " + ex.Message);
+				Uart_to_IO.DataReceived -= Uart_to_IO_DataReceived;
+				try { Uart_to_IO.Close(); } catch(Exception) { }
+				port_text.Text = "Çıkış Cihazı Bağlanamadı";
+				port_text.ForeColor = red;
+			}
+		}
+
+		// T07: external reset tool only when explicitly enabled and present; every launch is logged.
+		private void TryLaunchUartResetTool(string reason)
+		{
+			if(!Settings.Default.UartResetToolEnabled) return;
+			try
+			{
+				string path = Settings.Default.UartResetToolPath;
+				if(string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+				{
+					UiLog("UART reset aracı bulunamadı: " + path);
+					return;
+				}
+				if(Process.GetProcessesByName(Path.GetFileNameWithoutExtension(path)).Length > 0) return;
+				UiLog("UART reset aracı başlatılıyor (" + reason + "): " + path);
+				ProcessStartInfo psi = new ProcessStartInfo();
+				psi.FileName = path;
+				psi.UseShellExecute = true;
+				psi.Verb = "runas";
+				Process.Start(psi);
+			}
+			catch(Exception ex)
+			{
+				UiLog(ex.ToString() + "
+");
+			}
+		}
 		private void Uart_connect()
 		{
 			if(simIo != null)
@@ -492,100 +600,7 @@ namespace RealVisionLab
 			}
 			try
 			{
-				if(Settings.Default.UartEnable)
-				{
-					if(!Uart_to_IO.IsOpen)
-					{
-						string[] ports = SerialPort.GetPortNames();
-						int portscount = ports.Length;
-						if(portscount > 0)
-						{
-							port_text.Text = "Çıkış Cihazı Bağlanamadı";
-							Uart_to_IO.DataReceived -= Uart_to_IO_DataReceived;
-							port_text.ForeColor = red;
-							lbl_alarm.Text = "Bağlanıyor...";
-							lbl_alarm.ForeColor = org;
-							Uart_to_IO.PortName = ports[portscount - 1];
-							Uart_to_IO.BaudRate = Settings.Default.baud;
-							try
-							{
-								Uart_to_IO.Open();
-							}
-							catch(Exception)
-							{
-								if(!uartResetAlreadyOpened)
-								{
-									uartResetAlreadyOpened = true;
-
-									// Uygulamayı yönetici olarak yeniden başlatma işlemine geçin
-									ProcessStartInfo psi = new ProcessStartInfo();
-									psi.FileName = "C:\\UartReset\\UartReset.exe"; // UartReset.exe dosya yolunu doğru şekilde değiştirin
-									psi.UseShellExecute = true;
-									psi.Verb = "runas"; // Uygulamayı yönetici olarak başlatmak için "runas" kullanılır
-
-									try
-									{
-										Process.Start(psi);
-									}
-									catch(Exception ex)
-									{
-										UiLog(ex.ToString() + "\r\n");
-									}
-								}
-								else
-								{
-									string processName = "UartReset";
-									Process[] processes2 = Process.GetProcessesByName(processName);
-									if(processes2.Length < 1) uartResetAlreadyOpened = false;
-								}
-
-								// SerialPort kapanana kadar bekle
-
-								// SerialPort tekrar açıldı, işlemlerinizi burada devam ettirin
-							}
-							finally
-							{
-								// Connect probe (0x00 = all outputs off). Throws like the former direct
-								// SerialPort.Write if Open() failed; that flow is kept as-is until T07.
-								uartPort.WriteConnectProbe();
-								port_text.Text = "Çıkış Cihazı Bağlandı";
-								Uart_to_IO.DataReceived += Uart_to_IO_DataReceived;
-								port_text.ForeColor = grn;
-							}
-							Thread.Sleep(1000); // İstenilen süre boyunca bekleyin (örneğin 100 ms)
-						}
-						else
-						{
-							lbl_alarm.Text = "Cihaz bulunamadı";
-							lbl_alarm.ForeColor = red;
-							ProcessStartInfo psi = new ProcessStartInfo();
-							psi.FileName = "C:\\UartReset\\UartReset.exe"; // UartReset.exe dosya yolunu doğru şekilde değiştirin
-							psi.UseShellExecute = true;
-							psi.Verb = "runas"; // Uygulamayı yönetici olarak başlatmak için "runas" kullanılır
-							string processName = "UartReset";
-							Process[] processes2 = Process.GetProcessesByName(processName);
-							if(processes2.Length < 1)
-							{
-								try
-								{
-									Process.Start(psi);
-								}
-								catch(Exception ex)
-								{
-									UiLog(ex.ToString() + "\r\n");
-								}
-							}
-						}
-					}
-					else
-					{
-						// Connect probe (0x00 = all outputs off); throws on failure as before T04.
-						uartPort.WriteConnectProbe();
-						port_text.Text = "Çıkış Cihazı Bağlandı (UART)";
-						port_text.ForeColor = grn;
-					}
-				}
-
+				if(Settings.Default.UartEnable) UartConnectCore();
 			}
 			catch(Exception ex)
 			{
@@ -2918,7 +2933,7 @@ namespace RealVisionLab
 					string uartError;
 					if(!uartPort.TryReceive(out uartInputs, out boolDizisi, out uartError))
 					{
-						UiLog("DataReceived Error: " + uartError);
+						if(uartError != null) UiLog("DataReceived Error: " + uartError);
 						return;
 					}
 					if(uartInputs.Start && !islem)

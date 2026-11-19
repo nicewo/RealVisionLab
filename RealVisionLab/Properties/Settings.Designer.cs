@@ -263,6 +263,42 @@ namespace RealVisionLab.Properties {
                 this["UartEnable"] = value;
             }
         }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string UartPort {
+            get {
+                return ((string)(this["UartPort"]));
+            }
+            set {
+                this["UartPort"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool UartResetToolEnabled {
+            get {
+                return ((bool)(this["UartResetToolEnabled"]));
+            }
+            set {
+                this["UartResetToolEnabled"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("C:\\UartReset\\UartReset.exe")]
+        public string UartResetToolPath {
+            get {
+                return ((string)(this["UartResetToolPath"]));
+            }
+            set {
+                this["UartResetToolPath"] = value;
+            }
+        }
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]

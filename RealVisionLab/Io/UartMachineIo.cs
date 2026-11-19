@@ -135,6 +135,13 @@ namespace RealVisionLab.Io
 				try
 				{
 					string receiveText = _port.ReadExisting();
+					if(string.IsNullOrEmpty(receiveText))
+					{
+						// Spurious/empty DataReceived event: nothing to decode, not an error.
+						inputs = new MachineInputs();
+						error = null;
+						return false;
+					}
 					int receiveDec = Convert.ToByte(receiveText[0]);
 
 					for(int i = 0; i < 8; i++)

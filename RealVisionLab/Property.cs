@@ -1294,7 +1294,10 @@ namespace RealVisionLab
             string[] ports = SerialPort.GetPortNames();
             int portscount = ports.Length;
             chb_uart_enable.Checked = Settings.Default.UartEnable;
-            if (portscount > 0) txt_uart_com.Text = ports[portscount - 1]; else txt_uart_com.Text = "PortYok";
+            txt_uart_com.Items.Clear();
+            txt_uart_com.Items.Add(""); // empty = legacy behaviour (last COM port)
+            txt_uart_com.Items.AddRange(ports);
+            txt_uart_com.Text = Settings.Default.UartPort ?? "";
             txt_uart_baud.Text = Settings.Default.baud.ToString();
 
 
@@ -1400,6 +1403,12 @@ namespace RealVisionLab
             Settings.Default.PSlot = (int)nud_plc_slot.Value;
 
             Settings.Default.UartEnable = chb_uart_enable.Checked;
+            // T07: empty = legacy (last COM port); otherwise a COM port name (may be currently absent, e.g. unplugged).
+            string uartPortText = (txt_uart_com.Text ?? "").Trim().ToUpperInvariant();
+            if (uartPortText.Length == 0 || System.Text.RegularExpressions.Regex.IsMatch(uartPortText, @"^COM\d+$"))
+                Settings.Default.UartPort = uartPortText;
+            else
+                MessageBox.Show("Geçersiz COM port adı (örn. COM3). UART portu kaydedilmedi.");
             Settings.Default.baud = int.Parse(txt_uart_baud.Text);
 
             Settings.Default.plc_lamba = (int)nud_plc_lamba.Value;

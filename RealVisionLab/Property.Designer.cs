@@ -98,7 +98,7 @@
 			this.label18 = new System.Windows.Forms.Label();
 			this.nud_Lamba = new System.Windows.Forms.NumericUpDown();
 			this.label19 = new System.Windows.Forms.Label();
-			this.txt_uart_com = new System.Windows.Forms.TextBox();
+			this.txt_uart_com = new System.Windows.Forms.ComboBox();
 			this.label20 = new System.Windows.Forms.Label();
 			this.tab_genel = new System.Windows.Forms.TabPage();
 			this.btn_colorChange = new System.Windows.Forms.Button();
@@ -1813,7 +1813,7 @@
         private System.Windows.Forms.Label label18;
         private System.Windows.Forms.NumericUpDown nud_Lamba;
         private System.Windows.Forms.Label label19;
-        private System.Windows.Forms.TextBox txt_uart_com;
+        private System.Windows.Forms.ComboBox txt_uart_com;
         private System.Windows.Forms.Label label20;
         private System.Windows.Forms.TabControl plc_tabControl;
         private System.Windows.Forms.NumericUpDown nud_Wait1;

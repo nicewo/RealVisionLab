@@ -62,6 +62,15 @@
     <Setting Name="UartEnable" Type="System.Boolean" Scope="User">
       <Value Profile="(Default)">False</Value>
     </Setting>
+    <Setting Name="UartPort" Type="System.String" Scope="User">
+      <Value Profile="(Default)" />
+    </Setting>
+    <Setting Name="UartResetToolEnabled" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="UartResetToolPath" Type="System.String" Scope="User">
+      <Value Profile="(Default)">C:\UartReset\UartReset.exe</Value>
+    </Setting>
     <Setting Name="baud" Type="System.Int32" Scope="User">
       <Value Profile="(Default)">115200</Value>
     </Setting>
