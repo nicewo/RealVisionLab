@@ -161,6 +161,12 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Io\CompositeMachineIo.cs" />
+    <Compile Include="Io\IMachineIo.cs" />
+    <Compile Include="Io\MachineOutputs.cs" />
+    <Compile Include="Io\S7MachineIo.cs" />
+    <Compile Include="Io\SimulatedMachineIo.cs" />
+    <Compile Include="Io\UartMachineIo.cs" />
     <Compile Include="MainPage.cs">
       <SubType>Form</SubType>
     </Compile>

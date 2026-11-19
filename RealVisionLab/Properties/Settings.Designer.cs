@@ -359,5 +359,17 @@ namespace RealVisionLab.Properties {
                 this["reset_buton"] = value;
             }
         }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool SimulateIo {
+            get {
+                return ((bool)(this["SimulateIo"]));
+            }
+            set {
+                this["SimulateIo"] = value;
+            }
+        }
     }
 }

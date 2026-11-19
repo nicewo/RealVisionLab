@@ -2,8 +2,8 @@
 using AForge.Video;
 using AForge.Video.DirectShow;
 using DirectShowLib;
+using RealVisionLab.Io;
 using RealVisionLab.Properties;
-using Sharp7;
 using System;
 using System.Data.Common;
 using System.Diagnostics;
@@ -38,8 +38,14 @@ namespace RealVisionLab
 		//---------- Değişken Tanımlamaları Başlangıç ------------------------------------------------------
 		private Property set;
 
-		public static S7Client
-			client = null;
+		// Machine I/O (T04). All PLC/UART output writes and input reads go through these.
+		// io      : composite of the enabled backends, or the simulator when Settings.SimulateIo.
+		// plcIo   : S7 backend only (or simulator channel "PLC") for PLC-only writes kept from pre-T04 code.
+		// uartIo  : UART backend only (or simulator channel "UART").
+		private S7MachineIo s7Io;
+		private UartMachineIo uartPort;
+		private SimulatedMachineIo simIo;
+		private IMachineIo io, plcIo, uartIo;
 
 		public static VideoCaptureDevice[]
 			cam;
@@ -83,19 +89,15 @@ namespace RealVisionLab
 			qr = false,
 			uartResetAlreadyOpened = false;
 		public static bool[]
-			cam_var,
-			bitArray = new bool[8] { false, false, false, false, false, false, false, false };
+			cam_var;
 		public static bool[,]
 			hata;
-		public static byte[]
-			controlPlc = new byte[1];
 		public static int
 			tab_index = 0,
 			alarmtime = 0,
 			capture_count = 0,
 			tarama_count = 0,
 			caming_id = 0,
-			result = 1,
 			gthresint = 128,
 			renk = 0,
 			newFileIndex,
@@ -139,7 +141,7 @@ namespace RealVisionLab
 				InitializeComponent();
 				ApplyCameraSettingsToAll();
 
-				client = new S7Client();
+				InitMachineIo();
 
 				string camString = Settings.Default.Cam;
 				Cam_no = new int[camString.Split('/').Length];
@@ -450,28 +452,12 @@ namespace RealVisionLab
 
 				visibility(false);
 
-				if(Uart_to_IO.IsOpen)
+				// All outputs off on every connected backend; reconnect the ones that are down (as before T04).
+				WriteOutputs(io, MachineOutputs.AllOff);
+				if(simIo == null)
 				{
-					Uart_to_IO.Write(new byte[] { 0x00 }, 0, 1);
-				}
-				else
-				{
-					Uart_connect();
-				}
-
-				if(client.Connected)
-				{
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_lamba, false); //Lamba
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_bos, false); //Lamba
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_piston, false); //Piston
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_kase, false); //kaşe
-					result = client.DBWrite(1, 0, 1, controlPlc);
-
-					if(result != 0) port_text.Text = client.ErrorText(result);
-				}
-				else
-				{
-					Uart_connect();
+					if(!uartPort.IsConnected) Uart_connect();
+					if(!s7Io.IsConnected) Uart_connect();
 				}
 
 				timer.Start();
@@ -488,6 +474,12 @@ namespace RealVisionLab
 		}
 		private void Uart_connect()
 		{
+			if(simIo != null)
+			{
+				// Settings.SimulateIo: no real UART/PLC connection is attempted.
+				port_text.Text = "SİMÜLASYON";
+				return;
+			}
 			try
 			{
 				if(Settings.Default.UartEnable)
@@ -543,7 +535,9 @@ namespace RealVisionLab
 							}
 							finally
 							{
-								Uart_to_IO.Write(new byte[] { 0x00 }, 0, 1);
+								// Connect probe (0x00 = all outputs off). Throws like the former direct
+								// SerialPort.Write if Open() failed; that flow is kept as-is until T07.
+								uartPort.WriteConnectProbe();
 								port_text.Text = "Çıkış Cihazı Bağlandı";
 								Uart_to_IO.DataReceived += Uart_to_IO_DataReceived;
 								port_text.ForeColor = grn;
@@ -575,7 +569,8 @@ namespace RealVisionLab
 					}
 					else
 					{
-						Uart_to_IO.Write(new byte[] { 0x00 }, 0, 1);
+						// Connect probe (0x00 = all outputs off); throws on failure as before T04.
+						uartPort.WriteConnectProbe();
 						port_text.Text = "Çıkış Cihazı Bağlandı (UART)";
 						port_text.ForeColor = grn;
 					}
@@ -588,17 +583,13 @@ namespace RealVisionLab
 			}
 			if(Settings.Default.PlcEnable)
 			{
-				result = client.ConnectTo(Settings.Default.PIp, Settings.Default.PRack, Settings.Default.PSlot);
-				port_text.Text = result.ToString();
-				if(result == 0)
+				int connectResult;
+				string plcError;
+				s7Io.TryConnect(Settings.Default.PIp, Settings.Default.PRack, Settings.Default.PSlot, out connectResult, out plcError);
+				port_text.Text = connectResult.ToString();
+				if(connectResult == 0)
 				{
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_lamba, false); //Lamba
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_bos, false); //Lamba
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_piston, false); //Piston
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_kase, false); //kaşe
-					result = client.DBWrite(1, 0, 1, controlPlc);
-
-					if(result != 0) port_text.Text = client.ErrorText(result);
+					if(!s7Io.TryWriteOutputs(MachineOutputs.AllOff, out plcError)) port_text.Text = plcError;
 					else
 					{
 						port_text.Text = "Çıkış Cihazı Bağlandı (ETH)";
@@ -607,7 +598,7 @@ namespace RealVisionLab
 				}
 				else
 				{
-					port_text.Text = client.ErrorText(result);
+					port_text.Text = plcError;
 				}
 			}
 
@@ -778,7 +769,7 @@ namespace RealVisionLab
 					}
 				}
 
-				if(lbl_alarm.Text != "HAZIR" && Uart_to_IO.IsOpen)
+				if(lbl_alarm.Text != "HAZIR" && (simIo != null ? simIo.IsConnected : uartPort.IsConnected))
 				{
 					lbl_alarm.Text = "HAZIR";
 					lbl_alarm.ForeColor = org;
@@ -787,46 +778,66 @@ namespace RealVisionLab
 
 				lbl_datetime.Text = DateTime.Now.ToString();
 				alarm = false;
-				if(Settings.Default.UartEnable)
+				if(simIo != null)
 				{
-					if(!Uart_to_IO.IsOpen)
+					// Simulated inputs: Start behaves like the PLC start bit (level), Reset like the UART reset bit.
+					MachineInputs simInputs;
+					string simError;
+					if(simIo.TryReadInputs(out simInputs, out simError))
 					{
-						uartCount++;
-						port_text.Text = "Çıkış Cihazı Bağlanamadı (UART)";
-						Uart_to_IO.DataReceived -= Uart_to_IO_DataReceived;
-						port_text.ForeColor = red;
+						buton = simInputs.Start;
+						if(simInputs.Reset) rst_buton = true;
 					}
 					else
 					{
-						uartCount = 0;
-					}
-
-					if(uartCount > 15)
-					{
-						uartCount = 0;
-						Uart_connect();
+						port_text.Text = simError;
 					}
 				}
-				if(Settings.Default.PlcEnable)
+				else
 				{
-					if(!client.Connected)
+					if(Settings.Default.UartEnable)
 					{
-						uartCount++;
-						port_text.Text = "Çıkış Cihazı Bağlanamadı (ETH)";
-						port_text.ForeColor = red;
-					}
-					else
-					{
-						uartCount = 0;
-						byte[] controlPLC = new byte[1];
-						result = client.DBRead(1, 0, 1, controlPLC); buton = S7.GetBitAt(controlPLC, 0, Settings.Default.plc_buton);
+						if(!Uart_to_IO.IsOpen)
+						{
+							uartCount++;
+							port_text.Text = "Çıkış Cihazı Bağlanamadı (UART)";
+							Uart_to_IO.DataReceived -= Uart_to_IO_DataReceived;
+							port_text.ForeColor = red;
+						}
+						else
+						{
+							uartCount = 0;
+						}
 
+						if(uartCount > 15)
+						{
+							uartCount = 0;
+							Uart_connect();
+						}
 					}
-
-					if(uartCount > 15)
+					if(Settings.Default.PlcEnable)
 					{
-						uartCount = 0;
-						Uart_connect();
+						if(!s7Io.IsConnected)
+						{
+							uartCount++;
+							port_text.Text = "Çıkış Cihazı Bağlanamadı (ETH)";
+							port_text.ForeColor = red;
+						}
+						else
+						{
+							uartCount = 0;
+							// As before T04: a failed read yields Start = false; the error is not shown.
+							MachineInputs plcInputs;
+							string plcError;
+							s7Io.TryReadInputs(out plcInputs, out plcError);
+							buton = plcInputs.Start;
+						}
+
+						if(uartCount > 15)
+						{
+							uartCount = 0;
+							Uart_connect();
+						}
 					}
 				}
 
@@ -844,7 +855,6 @@ namespace RealVisionLab
 			int[] yon_no = new int[2];
 			yon_no[0] = 0;
 			yon_no[1] = 0;
-			for(int t = 0; t < 8; t++) { bitArray[t] = false; }
 			try
 			{
 				lbl_alarm.Text = "İşlem Başladı.";
@@ -853,30 +863,8 @@ namespace RealVisionLab
 				string[] bekleme = Settings.Default.Bekleme.Split('-');
 				rectString = Settings.Default.Rect.Split('/');
 
-				if(Uart_to_IO.IsOpen)
-				{
-					bitArray[Settings.Default.Lamba] = true;
-					bitArray[Settings.Default.Piston] = true;
-					bitArray[Settings.Default.Kase] = false;
-					bitArray[Settings.Default.bosBit] = false;
-
-					Uart_to_IO.Write(new byte[] { ConvertToByte(bitArray) }, 0, 1);
-
-				}
-				if(client.Connected)
-				{
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_lamba, true); //Lamba
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_bos, false); //Lazer
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_piston, true); //Piston
-					S7.SetBitAt(controlPlc, 0, Settings.Default.plc_kase, false); //kaşe
-					result = client.DBWrite(1, 0, 1, controlPlc);
-
-					if(result != 0)
-						port_text.Text = client.ErrorText(result);
-					//else
-					//    return;
-
-				} // Piston-Lamba => 1 ve 2 çıkış
+				// Piston-Lamba => 1 ve 2 çıkış (UART and PLC)
+				WriteOutputs(io, new MachineOutputs(lamba: true, piston: true, kase: false, bos: false));
 
 				await Task.Delay(int.Parse(bekleme[0]));
 
@@ -1227,53 +1215,17 @@ namespace RealVisionLab
 					lbl_alarm.ForeColor = grn;
 					await Task.Delay(int.Parse(bekleme[5]));
 
-					if(Settings.Default.UartEnable && Uart_to_IO.IsOpen)
-					{
-						bitArray[Settings.Default.Lamba] = true;
-						bitArray[Settings.Default.Piston] = true;
-						bitArray[Settings.Default.Kase] = true;
-						bitArray[Settings.Default.bosBit] = true;
-						Uart_to_IO.Write(new byte[] { ConvertToByte(bitArray) }, 0, 1);
-					} // Piston-Lamba-Kaşe => 1, 2, 3 ve 4 çıkış
-					if(Settings.Default.PlcEnable && client != null)
-					{
-						if(client.Connected)
-						{
-							S7.SetBitAt(controlPlc, 0, Settings.Default.plc_lamba, true); //Lamba
-							S7.SetBitAt(controlPlc, 0, Settings.Default.plc_bos, true); //Lamba
-							S7.SetBitAt(controlPlc, 0, Settings.Default.plc_piston, true); //Piston
-							S7.SetBitAt(controlPlc, 0, Settings.Default.plc_kase, true); //kaşe
-							result = client.DBWrite(1, 0, 1, controlPlc);
-
-							if(result != 0)
-								port_text.Text = client.ErrorText(result);
-
-						}
-					}
+					// Piston-Lamba-Kaşe => 1, 2, 3 ve 4 çıkış (UART and PLC)
+					WriteOutputs(io, new MachineOutputs(lamba: true, piston: true, kase: true, bos: true));
 					await Task.Delay(int.Parse(bekleme[6]));
-					if(Settings.Default.UartEnable && Uart_to_IO.IsOpen)
+					// Kaşe off. Pre-T04 asymmetry kept on purpose: UART clears the boş bit, PLC keeps plc_bos = true.
+					if((simIo != null || Settings.Default.UartEnable) && uartIo.IsConnected)
 					{
-						bitArray[Settings.Default.Lamba] = true;
-						bitArray[Settings.Default.Piston] = true;
-						bitArray[Settings.Default.Kase] = false;
-						bitArray[Settings.Default.bosBit] = false;
-						Uart_to_IO.Write(new byte[] { ConvertToByte(bitArray) }, 0, 1);
+						WriteOutputs(uartIo, new MachineOutputs(lamba: true, piston: true, kase: false, bos: false));
 					}
-					if(Settings.Default.PlcEnable && client != null)
+					if((simIo != null || Settings.Default.PlcEnable) && plcIo.IsConnected)
 					{
-						if(client.Connected)
-						{
-							S7.SetBitAt(controlPlc, 0, Settings.Default.plc_lamba, true); //Lamba
-							S7.SetBitAt(controlPlc, 0, Settings.Default.plc_bos, true); //Lamba
-							S7.SetBitAt(controlPlc, 0, Settings.Default.plc_piston, true); //Piston
-							S7.SetBitAt(controlPlc, 0, Settings.Default.plc_kase, false); //kaşe
-							result = client.DBWrite(1, 0, 1, controlPlc);
-
-							if(result != 0)
-								port_text.Text = client.ErrorText(result);
-
-
-						}
+						WriteOutputs(plcIo, new MachineOutputs(lamba: true, piston: true, kase: false, bos: true));
 					}
 
 
@@ -2365,16 +2317,10 @@ namespace RealVisionLab
 				buton = false;
 				lbl_alarm.Text = "BEKLENİYOR";
 				lbl_alarm.ForeColor = org;
-				if(client.Connected)
+				if(plcIo.IsConnected)
 				{
-					byte[] controlPLC = new byte[1];
-					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_lamba, true); //Lamba
-					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_piston, true); //Piston
-					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_bos, true); //Lazer
-					result = client.DBWrite(1, 0, 1, controlPLC);
-
-					if(result != 0)
-						port_text.Text = client.ErrorText(result);
+					// PLC only (UART untouched), as before T04: Lamba, Piston, Lazer(boş) on; Kaşe off.
+					WriteOutputs(plcIo, new MachineOutputs(lamba: true, piston: true, kase: false, bos: true));
 				}
 				bool basildi = false;
 				for(int i = 0; i < Thrs[r_n] * 10; i++)
@@ -2392,23 +2338,20 @@ namespace RealVisionLab
 					if(buton) i = Thrs[r_n] * 10;
 					Thread.Sleep(100);
 
-					if(client.Connected)
+					if(plcIo.IsConnected)
 					{
-						byte[] controlPLC = new byte[1];
-						result = client.DBRead(1, 0, 1, controlPLC); basildi = S7.GetBitAt(controlPLC, 0, Settings.Default.plc_buton);
+						// A failed read yields Start = false, as before T04.
+						MachineInputs plcInputs;
+						string plcError;
+						plcIo.TryReadInputs(out plcInputs, out plcError);
+						basildi = plcInputs.Start;
 					}
 					if(basildi)
 					{
-						if(client.Connected)
+						if(plcIo.IsConnected)
 						{
-							byte[] controlPLC = new byte[1];
-							S7.SetBitAt(controlPLC, 0, Settings.Default.plc_lamba, true); //Lamba
-							S7.SetBitAt(controlPLC, 0, Settings.Default.plc_piston, true); //Piston
-							S7.SetBitAt(controlPLC, 0, Settings.Default.plc_bos, false); //Lazer
-							result = client.DBWrite(1, 0, 1, controlPLC);
-
-							if(result != 0)
-								port_text.Text = client.ErrorText(result);
+							// PLC only: Lamba, Piston on; Lazer(boş), Kaşe off.
+							WriteOutputs(plcIo, new MachineOutputs(lamba: true, piston: true, kase: false, bos: false));
 						}
 						buton = true;
 					}
@@ -2440,16 +2383,10 @@ namespace RealVisionLab
 				txt_qr.Text = "";
 				lbl_alarm.Text = "BEKLENİYOR...";
 				lbl_alarm.ForeColor = org;
-				if(client.Connected)
+				if(plcIo.IsConnected)
 				{
-					byte[] controlPLC = new byte[1];
-					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_lamba, true); //Lamba
-					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_piston, true); //Piston
-					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_bos, true); //Lazer
-					result = client.DBWrite(1, 0, 1, controlPLC);
-
-					if(result != 0)
-						port_text.Text = client.ErrorText(result);
+					// PLC only (UART untouched), as before T04: Lamba, Piston, Lazer(boş) on; Kaşe off.
+					WriteOutputs(plcIo, new MachineOutputs(lamba: true, piston: true, kase: false, bos: true));
 				}
 
 				int qrCounter = 0;
@@ -2480,37 +2417,55 @@ namespace RealVisionLab
 
 		// Tarama Fonksiyonları Bitiş ------------------------------------------------------------------------------
 
-		byte ConvertToByte(bool[] bits)
+		// Machine I/O wiring (T04) ------------------------------------------------------------------------------
+
+		private void InitMachineIo()
 		{
-			if(bits.Length != 8)
+			// Bit positions are read from Settings at every call, as the pre-T04 code did.
+			s7Io = new S7MachineIo(() => new S7BitMap
 			{
-				// bits dizisini 8 elemanlı yapacak şekilde tamamlayın
-				bool[] paddedBits = new bool[8];
-				for(int i = 0; i < 8; i++)
-				{
-					if(i < bits.Length)
-					{
-						paddedBits[i] = bits[i];
-					}
-					else
-					{
-						paddedBits[i] = false;
-					}
-				}
-				bits = paddedBits;
-			}
-
-			byte result = 0;
-
-			for(int i = 0; i < 8; i++)
+				Lamba = Settings.Default.plc_lamba,
+				Piston = Settings.Default.plc_piston,
+				Kase = Settings.Default.plc_kase,
+				Bos = Settings.Default.plc_bos,
+				Start = Settings.Default.plc_buton
+			});
+			uartPort = new UartMachineIo(Uart_to_IO, () => new UartBitMap
 			{
-				if(bits[i])
-				{
-					result |= (byte)(1 << i);
-				}
-			}
+				Lamba = Settings.Default.Lamba,
+				Piston = Settings.Default.Piston,
+				Kase = Settings.Default.Kase,
+				Bos = Settings.Default.bosBit,
+				Start = Settings.Default.buton,
+				Reset = Settings.Default.reset_buton
+			});
 
-			return result;
+			if(Settings.Default.SimulateIo)
+			{
+				simIo = new SimulatedMachineIo();
+				io = simIo;
+				plcIo = simIo.Channel("PLC");
+				uartIo = simIo.Channel("UART");
+				port_text.Text = "SİMÜLASYON";
+			}
+			else
+			{
+				io = new CompositeMachineIo()
+					.Add("UART", uartPort, () => Settings.Default.UartEnable)
+					.Add("PLC", s7Io, () => Settings.Default.PlcEnable);
+				plcIo = s7Io;
+				uartIo = uartPort;
+			}
+		}
+
+		/// <summary>Writes outputs; on failure the error goes to port_text (as before T04).</summary>
+		private void WriteOutputs(IMachineIo target, MachineOutputs outputs)
+		{
+			string error;
+			if(!target.TryWriteOutputs(outputs, out error))
+			{
+				port_text.Text = error;
+			}
 		}
 		static PointF TransformPoint(PointF a1, PointF b1, PointF c1, PointF a2, PointF b2)
 		{
@@ -2682,26 +2637,20 @@ namespace RealVisionLab
 			{
 				if(Settings.Default.UartEnable)
 				{
-					int receiving = Uart_to_IO.BytesToRead;
-					string recieveText = Uart_to_IO.ReadExisting();
-					int receiveDec = Convert.ToByte(recieveText[0]);
-
-
-
-
-					bool[] boolDizisi = new bool[8];
-
-					for(int i = 0; i < 8; i++)
+					// Decode moved to UartMachineIo.TryReceive (same logic, under the UART lock).
+					MachineInputs uartInputs;
+					bool[] boolDizisi;
+					string uartError;
+					if(!uartPort.TryReceive(out uartInputs, out boolDizisi, out uartError))
 					{
-						boolDizisi[i] = (receiveDec & (1 << i)) != 0; // her biti bool olarak ayır
+						tx_debug.Text = "DataReceived Error: " + uartError;
+						return;
 					}
-					Uart_to_IO.DiscardInBuffer();
-					Uart_to_IO.DiscardOutBuffer();
-					if(boolDizisi[Settings.Default.buton] && !islem)
+					if(uartInputs.Start && !islem)
 					{
 						buton = true;
 					}
-					if(boolDizisi[Settings.Default.reset_buton])
+					if(uartInputs.Reset)
 					{
 						rst_buton = true;
 					}
