@@ -1,76 +1,75 @@
 # RealVisionLab
 
-**Kamera tabanlı endüstriyel görüntü kontrolü ve makine entegrasyonu**
+**Camera-based industrial visual inspection with machine integration**
 
-RealVisionLab, Windows üzerinde çalışan; birden fazla kameradan görüntü almayı, tanımlı bölgeleri (ROI) incelemeyi ve kontrol sonuçlarını makine otomasyonuna aktarmayı amaçlayan endüstriyel bir görüntü kontrol uygulamasıdır.
+🇹🇷 [Türkçe README](README.tr.md)
 
-Uygulama; kamera görüntüleme ve görüntü işleme akışını, Siemens S7 PLC haberleşmesini ve UART üzerinden harici I/O kontrolünü tek bir operatör yazılımında bir araya getirir.
+RealVisionLab is a Windows application for industrial visual inspection. It captures images from multiple cameras, checks defined regions of interest (ROIs) and passes the result to the machine's automation.
 
-## Temel yetenekler
+It combines camera capture and image processing, Siemens S7 PLC communication and external I/O over UART in a single operator application.
 
-Kaynak kodda görülen işlev ve entegrasyon alanları:
+## Key capabilities
 
-- **Çoklu kamera erişimi:** AForge.Video ve DirectShow üzerinden bağlı video girişlerini listeleme, kamera seçimi ve çözünürlük yapılandırması.
-- **Bölge bazlı görüntü kontrolü:** Kamera görüntüsü üzerinde tanımlanmış dikdörtgen kontrol bölgeleri (ROI), eşik değerleri ve bölge durumlarının görsel olarak işaretlenmesi.
-- **Görüntü işleme:** AForge.Imaging filtreleriyle görüntü işleme altyapısı.
-- **PLC entegrasyonu:** Sharp7 üzerinden Siemens S7 PLC bağlantısı ve DB alanlarına kontrol biti yazma.
-- **Harici I/O haberleşmesi:** Seri port (UART) üzerinden bağlı çıkış kontrol cihazına komut gönderme.
-- **Kod okuma altyapısı:** ZXing ve ZBar bağımlılıklarıyla barkod/QR kod iş akışları.
-- **Operatör ve ayar ekranları:** Kamera, kontrol bölgeleri, eşikler, PLC ve UART yapılandırmalarını yönetmeye yönelik Windows Forms arayüzü.
-- **İşlem kayıtları:** Günlük tarama kayıtlarının tarih bazlı metin dosyalarına yazılması ve hata tanılama çıktıları.
+- **Multi-camera capture:** lists video inputs via AForge.Video / DirectShow, camera selection and resolution setup.
+- **ROI-based inspection:** rectangular inspection regions on the live image, per-region thresholds and visual pass/fail marking.
+- **Image processing:** AForge.Imaging filter pipeline.
+- **PLC integration:** Siemens S7 connection via Sharp7, writing result bits into DB areas.
+- **External I/O:** commands to an output controller over a serial port (UART).
+- **Barcode / QR:** ZXing and ZBar for code-reading workflows.
+- **Operator and settings screens:** Windows Forms UI for cameras, ROIs, thresholds, PLC and UART configuration, behind a password screen.
+- **Logging:** daily scan logs in date-based text files, plus diagnostic output.
 
-## Teknoloji yığını
+## Tech stack
 
-| Katman | Teknoloji |
+| Layer | Technology |
 |---|---|
-| Uygulama | C# / Windows Forms |
+| Application | C# / Windows Forms |
 | Runtime | .NET Framework 4.7.2 |
-| Kamera | AForge.Video, DirectShow |
-| Görüntü işleme | AForge.Imaging |
-| PLC haberleşmesi | Sharp7 / Siemens S7 |
-| Seri haberleşme | System.IO.Ports |
-| Barkod / QR | ZXing.Net, ZBar |
-| Yapılandırma | .NET Application Settings |
+| Camera | AForge.Video, DirectShow |
+| Image processing | AForge.Imaging |
+| PLC | Sharp7 / Siemens S7 |
+| Serial | System.IO.Ports |
+| Barcode / QR | ZXing.Net, ZBar |
+| Configuration | .NET Application Settings |
 
-## Çözüm yapısı
+## Solution layout
 
-- `RealVisionLab.sln` — Visual Studio çözümü
-- `RealVisionLab/RealVisionLab.csproj` — .NET Framework 4.7.2 Windows uygulaması
-- `RealVisionLab/MainPage.cs` — ana operatör ekranı, kamera ve kontrol akışları
-- `RealVisionLab/Property.cs` — yapılandırma arayüzü
-- `RealVisionLab/PasswordForm.cs` — parola ekranı
-- `RealVisionLab/Message.cs` — mesaj ekranı
-- `RealVisionLab/Settings1.cs` — uygulama ayarları yardımcı sınıfı
+- `RealVisionLab.sln` — Visual Studio solution
+- `RealVisionLab/RealVisionLab.csproj` — .NET Framework 4.7.2 Windows app
+- `RealVisionLab/MainPage.cs` — main operator screen, camera and inspection flow
+- `RealVisionLab/Property.cs` — configuration UI
+- `RealVisionLab/PasswordForm.cs` — password screen
+- `RealVisionLab/Message.cs` — message screen
+- `RealVisionLab/Settings1.cs` — settings helper
+- `Program/` — published ClickOnce setup
 
-## Geliştirme ortamı
+## Development environment
 
-- Windows
-- Visual Studio ve .NET Framework 4.7.2 Developer Pack / Targeting Pack
-- NuGet paketlerinin geri yüklenebilmesi için internet bağlantısı
-- Test için DirectShow tarafından görülebilen kamera veya kamera simülatörü
-- PLC ve UART işlevleri için ilgili donanım veya test düzeneği
+- Windows, Visual Studio, .NET Framework 4.7.2 Developer Pack
+- Internet access for NuGet restore
+- A DirectShow-visible camera (or a virtual camera) for testing
+- PLC and UART hardware, or a test rig, for those features
 
-Çözümü Visual Studio'da açıp NuGet paketlerini geri yükledikten sonra `RealVisionLab` projesini derleyin.
+Open the solution, restore NuGet packages and build the `RealVisionLab` project.
 
-## Devreye alma notları
+## Commissioning notes
 
-1. Kamera indeksleri ve çözünürlük ayarlarını hedef bilgisayardaki gerçek kamera listesine göre yapılandırın.
-2. ROI koordinatlarının kullanılan kamera çözünürlüğü ve görüntü ölçeklemesiyle eşleştiğini doğrulayın.
-3. Görüntü eşiklerini gerçek ürün örnekleriyle kalibre edin; farklı ışık, pozlama ve ürün varyasyonlarını test edin.
-4. PLC IP, rack/slot ve DB adreslerini hedef makine PLC programıyla karşılaştırın.
-5. UART portu, baud rate ve bağlı I/O cihazının protokolünü doğrulayın.
-6. Makine çıkışlarını etkinleştirmeden önce kamera, PLC ve seri haberleşme kaybı senaryolarını test edin.
+1. Configure camera indexes and resolutions for the real camera list on the target PC.
+2. Make sure ROI coordinates match the camera resolution and display scaling.
+3. Calibrate thresholds with real product samples under varying light, exposure and product variants.
+4. Check PLC IP, rack/slot and DB addresses against the machine's PLC program.
+5. Verify the UART port, baud rate and the I/O device's protocol.
+6. Test camera, PLC and serial loss scenarios before enabling machine outputs.
 
-## Güvenlik ve güvenilirlik
+## Safety and reliability
 
-- PLC çıkışları makine hareketini veya proses güvenliğini etkileyebilir. Emniyet fonksiyonları yalnızca bu PC uygulamasına bırakılmamalı; PLC ve donanım seviyesinde bağımsız olarak tasarlanıp doğrulanmalıdır.
-- Kamera veya haberleşme hatasında sistemin güvenli duruma geçişi gerçek makine üzerinde doğrulanmalıdır.
-- Uygulama, eski tip .NET Framework 4.7.2 ve AForge bağımlılıkları kullanır. Yeni Windows sürümleri ve güncel donanımlarla uyumluluk ayrıca test edilmelidir.
-- Kaynak kodda makineye özel IP, seri port, dosya yolu veya erişim bilgileri bulunuyorsa dağıtımdan önce gözden geçirilmelidir.
+- PLC outputs can affect machine motion and process safety. Safety functions must not rely on this PC application; design and validate them independently at PLC and hardware level.
+- Verify on the real machine that the system goes to a safe state on camera or communication failure.
+- The app uses .NET Framework 4.7.2 and AForge; test compatibility with newer Windows versions and hardware.
 
-## Proje durumu
+## Status
 
-Bu depo mevcut bir Windows Forms uygulamasının kaynak kodunu içerir. README'deki açıklamalar kaynak kodda görülen entegrasyonlara dayanır; görüntü kontrol doğruluğu, çevrim süresi, makine emniyeti ve üretim performansı için bağımsız saha doğrulaması gerektiği unutulmamalıdır.
+Source code of a production Windows Forms application. A modern .NET rewrite is in progress in a separate (private) repository.
 
 ---
 
