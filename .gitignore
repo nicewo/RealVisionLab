@@ -1,0 +1,12 @@
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.rsuser
+
+# .NET build output
+[Bb]in/
+[Oo]bj/
+TestResults/
+*.log
