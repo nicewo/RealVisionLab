@@ -1,2 +1,18 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Windows/.NET source and project files use CRLF in the working tree
+*.cs       text eol=crlf
+*.csproj   text eol=crlf
+*.sln      text eol=crlf
+*.resx     text eol=crlf
+*.config   text eol=crlf
+*.settings text eol=crlf
+
+# Binary artifacts: never diff/merge/convert
+*.dll    binary
+*.exe    binary
+*.png    binary
+*.jpg    binary
+*.ico    binary
+*.deploy binary

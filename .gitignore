@@ -12,3 +12,29 @@ TestResults/
 *.log
 
 logs/
+
+# NuGet packages (packages.config restore)
+packages/
+*.nupkg
+
+# Runtime-generated files (debug log, values, camera settings)
+debug.txt
+**/Values/
+CameraSettings.xml
+
+# Local signing / key material
+*.pfx
+*.snk
+
+# ClickOnce / publish output
+app.publish/
+
+# Per-user application settings
+user.config
+
+# Tracked artifacts still present (NOT untracked by design).
+# Owner decision required before any `git rm --cached`:
+#   - Program/                              (tracked binaries, ClickOnce setup, Program/RealVision-Lab/*.exe/*.dll)
+#   - degerler.txt                          (tracked production scan log)
+#   - Program/RealVision-Lab/debug.txt      (tracked runtime log)
+#   - Program/RealVision-Lab/Values/*.txt   (tracked runtime values; matched by **/Values/ but still tracked)
