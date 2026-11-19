@@ -172,7 +172,6 @@ namespace RealVisionLab
 			this.Reset_setting.Size = new System.Drawing.Size(5, 5);
 			this.Reset_setting.TabIndex = 20;
 			this.Reset_setting.Text = "AyarSıfırlama";
-			this.Reset_setting.Click += new System.EventHandler(this.Reset_setting_Click);
 			// 
 			// port_text
 			// 

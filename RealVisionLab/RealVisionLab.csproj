@@ -186,6 +186,8 @@
       <DependentUpon>PasswordForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Program.cs" />
+    <Compile Include="Safety\RestartGuard.cs" />
+    <Compile Include="Safety\SettingsReset.cs" />
     <Compile Include="Property.cs">
       <SubType>Form</SubType>
     </Compile>

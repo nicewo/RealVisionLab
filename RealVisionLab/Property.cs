@@ -1466,11 +1466,32 @@ namespace RealVisionLab
             }
         }
 
+        /// <summary>
+        /// T05: "ayarsifirla" command. Admin mode only; confirmation + backup in Safety.SettingsReset.
+        /// Returns true when the text was this command (it is then never sent to the UART).
+        /// </summary>
+        private bool TryHandleSettingsResetCommand(string command)
+        {
+            if (command != "ayarsifirla") return false;
+            if (adminMode || Settings.Default.adminMode)
+            {
+                Safety.SettingsReset.ConfirmBackupAndReset(this);
+            }
+            else
+            {
+                MessageBox.Show(this, "Ayar sıfırlama yalnızca yönetici modunda yapılabilir.", "Yetki yok", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            return true;
+        }
+
         private void btn_send_Click(object sender, EventArgs e)
         {
             try
             {
-                if (txt_send.Text == "realtekno" || txt_send.Text == "2580")
+                if (TryHandleSettingsResetCommand(txt_send.Text))
+                {
+                }
+                else if (txt_send.Text == "realtekno" || txt_send.Text == "2580")
                 {
                     //enable işlemi
                     Settings.Default.adminMode = true;
@@ -1558,7 +1579,10 @@ namespace RealVisionLab
             {
                 try
                 {
-                    if (txt_send.Text == "realtekno" || txt_send.Text == "2580")
+                    if (TryHandleSettingsResetCommand(txt_send.Text))
+                    {
+                    }
+                    else if (txt_send.Text == "realtekno" || txt_send.Text == "2580")
                     {
                         //enable işlemi
                         Settings.Default.adminMode = true;

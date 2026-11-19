@@ -745,13 +745,43 @@ namespace RealVisionLab
 				if(buton)
 				{
 					buton = false;
-					capturing = false;
-					capture_count = 0;
-					islem = true;
+					string blockReason;
+					if(islem || CanStartCycle(out blockReason))
+					{
+						// islem: start while a cycle is pending/running keeps the pre-T05 behavior.
+						capturing = false;
+						capture_count = 0;
+						islem = true;
+						lastStartBlockLogged = null;
+					}
+					else
+					{
+						// T05: start refused (camera not running or enabled I/O backend disconnected).
+						ForceSafeState();
+						lbl_alarm.Text = "Başlatılamadı: " + blockReason;
+						lbl_alarm.ForeColor = red;
+						p_scene.BackColor = red;
+						if(lastStartBlockLogged != blockReason)
+						{
+							lastStartBlockLogged = blockReason;
+							tx_debug.Text = "Çevrim başlatma reddedildi: " + blockReason + " - " + DateTime.Now.ToString("HH:mm:ss.fff");
+						}
+					}
 				}
 				else
 				{
 					capture = true;
+				}
+
+				// T05: I/O backend dropped while a cycle is pending/running -> abort as NOK + safe state.
+				if(islem)
+				{
+					string ioReason;
+					if(!IoBackendsConnected(out ioReason))
+					{
+						AbortCycle(ioReason);
+						return;
+					}
 				}
 
 				if(!capturing)
@@ -769,7 +799,18 @@ namespace RealVisionLab
 					}
 				}
 
-				if(lbl_alarm.Text != "HAZIR" && (simIo != null ? simIo.IsConnected : uartPort.IsConnected))
+				string readyReason;
+				if(!islem && !CanStartCycle(out readyReason))
+				{
+					// T05: never show HAZIR while a start would be refused; show the reason instead.
+					if(!lbl_alarm.Text.EndsWith(readyReason))
+					{
+						lbl_alarm.Text = "Hazır değil: " + readyReason;
+						lbl_alarm.ForeColor = red;
+						p_scene.BackColor = red;
+					}
+				}
+				else if(lbl_alarm.Text != "HAZIR" && (simIo != null ? simIo.IsConnected : uartPort.IsConnected))
 				{
 					lbl_alarm.Text = "HAZIR";
 					lbl_alarm.ForeColor = org;
@@ -857,6 +898,7 @@ namespace RealVisionLab
 			yon_no[1] = 0;
 			try
 			{
+				cycleAborted = false;
 				lbl_alarm.Text = "İşlem Başladı.";
 				Bitmap[] bitmap = new Bitmap[cam.Length];
 				bool isTrue = false;
@@ -867,6 +909,8 @@ namespace RealVisionLab
 				WriteOutputs(io, new MachineOutputs(lamba: true, piston: true, kase: false, bos: false));
 
 				await Task.Delay(int.Parse(bekleme[0]));
+				// T05: the timer runs during bekleme[0] and may have aborted the cycle; I/O may also have dropped.
+				if(CycleAbortRequested()) return;
 
 				timer.Stop();
 				lbl_alarm.Text = "TARANIYOR";
@@ -891,6 +935,8 @@ namespace RealVisionLab
 						catch(Exception) { }
 					}
 					while(bitmap[c] == null && frameWatch.ElapsedMilliseconds < frameWaitMs);
+					// T05: the timer is stopped while scanning, so the I/O connection is checked at the await points.
+					if(CycleAbortRequested()) return;
 
 					bool frameMissing = bitmap[c] == null;
 					if(frameMissing)
@@ -1214,6 +1260,8 @@ namespace RealVisionLab
 					lbl_alarm.Text = "ONAYLANDI";
 					lbl_alarm.ForeColor = grn;
 					await Task.Delay(int.Parse(bekleme[5]));
+					// T05: never drive Kaşe after an I/O drop during this cycle.
+					if(CycleAbortRequested()) return;
 
 					// Piston-Lamba-Kaşe => 1, 2, 3 ve 4 çıkış (UART and PLC)
 					WriteOutputs(io, new MachineOutputs(lamba: true, piston: true, kase: true, bos: true));
@@ -1239,6 +1287,8 @@ namespace RealVisionLab
 			{
 				tx_debug.Text = exception.ToString();
 				txt_qr.Text = "!" + exception.ToString();
+				// T05: outputs to the safe state before anything else (Reset() below also writes all-off).
+				ForceSafeState();
 				timer.Start();
 				Reset();
 			}
@@ -2458,6 +2508,89 @@ namespace RealVisionLab
 			}
 		}
 
+		// Safe state / cycle gating (T05) ------------------------------------------------------------------------
+
+		// Set when a running cycle was aborted because an I/O backend dropped. Checked by Islemler at its await points.
+		private bool cycleAborted = false;
+		// Last start-refusal reason written to debug.txt (avoids logging the same reason every timer tick).
+		private string lastStartBlockLogged = null;
+
+		/// <summary>All outputs off on every backend (enabled or not). Never throws; callable from any thread.</summary>
+		public void ForceSafeState()
+		{
+			try
+			{
+				IMachineIo target = io;
+				if(target != null) target.ForceSafeState();
+			}
+			catch(Exception) { }
+		}
+
+		/// <summary>False with a reason when an enabled I/O backend (or the simulator) is disconnected.</summary>
+		private bool IoBackendsConnected(out string reason)
+		{
+			reason = null;
+			if(simIo != null)
+			{
+				if(!simIo.IsConnected) reason = "SİMÜLASYON I/O bağlı değil";
+			}
+			else
+			{
+				if(Settings.Default.UartEnable && (uartPort == null || !uartPort.IsConnected)) reason = "UART bağlantısı yok";
+				else if(Settings.Default.PlcEnable && (s7Io == null || !s7Io.IsConnected)) reason = "PLC bağlantısı yok";
+			}
+			return reason == null;
+		}
+
+		/// <summary>Cycle start precondition: every configured camera running and every enabled I/O backend connected.</summary>
+		private bool CanStartCycle(out string reason)
+		{
+			if(cam == null || cam.Length == 0)
+			{
+				reason = "Kamera tanımlı değil";
+				return false;
+			}
+			for(int i = 0; i < cam.Length; i++)
+			{
+				if(cam[i] == null || !cam[i].IsRunning)
+				{
+					reason = "Kamera " + (i + 1).ToString() + " çalışmıyor";
+					return false;
+				}
+			}
+			return IoBackendsConnected(out reason);
+		}
+
+		/// <summary>
+		/// Aborts the running cycle as NOK: outputs safe state, alarm shown, timer stopped.
+		/// The operator must Reset (password / reset input) as after a NOK without auto reset.
+		/// </summary>
+		private void AbortCycle(string reason)
+		{
+			cycleAborted = true;
+			ForceSafeState();
+			capturing = true;
+			islem = false;
+			timer.Stop();
+			lbl_alarm.Text = "NOK - " + reason + " (çevrim iptal)";
+			lbl_alarm.ForeColor = red;
+			p_scene.BackColor = red;
+			tx_debug.Text = "Çevrim iptal edildi: " + reason + " - " + DateTime.Now.ToString("HH:mm:ss.fff");
+		}
+
+		/// <summary>Used by Islemler after each await: true when the cycle has to stop (already aborted or I/O lost now).</summary>
+		private bool CycleAbortRequested()
+		{
+			if(cycleAborted) return true;
+			string reason;
+			if(!IoBackendsConnected(out reason))
+			{
+				AbortCycle(reason);
+				return true;
+			}
+			return false;
+		}
+
 		/// <summary>Writes outputs; on failure the error goes to port_text (as before T04).</summary>
 		private void WriteOutputs(IMachineIo target, MachineOutputs outputs)
 		{
@@ -2576,6 +2709,8 @@ namespace RealVisionLab
 		//-------------------------------------------------------------------------------
 		private void MainPage_FormClosing(object sender, FormClosingEventArgs e)
 		{
+			// T05: outputs to the safe state first, before cameras are stopped (WaitForStop may block).
+			ForceSafeState();
 			for(int i = 0; i < cam.Length; i++)
 			{
 				if(cam[i] != null && cam[i].IsRunning)
@@ -2586,11 +2721,13 @@ namespace RealVisionLab
 			}
 			SaveAllCameraSettingsToXml();
 		}
-		private void pb_RealTekno_Click(object sender, EventArgs e) { buton = true; }
-		private void Reset_setting_Click(object sender, EventArgs e)
+		private void pb_RealTekno_Click(object sender, EventArgs e)
 		{
-			Settings.Default.Reset();
+			// T05: the logo is a manual start only in debug builds or with simulated I/O. In production it is ignored.
+			if(debugMode || Settings.Default.SimulateIo) buton = true;
 		}
+		// T05: the hidden Reset_setting label no longer resets settings (click handler removed).
+		// Settings reset: Property screen, admin mode, "ayarsifirla" command -> Safety.SettingsReset (confirmation + backup).
 		private void lbl_datetime_Click(object sender, EventArgs e) { caming_id = (caming_id == 0) ? 1 : 0; }
 		private void Pb_companyLogo_Click(object sender, EventArgs e)
 		{
