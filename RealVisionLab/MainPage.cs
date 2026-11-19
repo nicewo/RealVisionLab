@@ -47,6 +47,13 @@ namespace RealVisionLab
 		private SimulatedMachineIo simIo;
 		private IMachineIo io, plcIo, uartIo;
 
+		// Thread safety (T06). Camera threads store frames here; the inspection cycle reads copies.
+		// pb_scene.Image is display only and is set/disposed on the UI thread only (ShowScene).
+		private FrameBuffer frameBuffer;
+		private readonly int uiThreadId;
+		// Frame size of the camera image under inspection (set by Islemler before each tarama function).
+		private Size scanFrameSize;
+
 		public static VideoCaptureDevice[]
 			cam;
 
@@ -137,7 +144,8 @@ namespace RealVisionLab
 				{
 					this.WindowState = FormWindowState.Maximized;
 				}
-				CheckForIllegalCrossThreadCalls = false;
+				// T06: UI controls are only touched on this thread; other threads go through RunOnUi.
+				uiThreadId = Thread.CurrentThread.ManagedThreadId;
 				InitializeComponent();
 				ApplyCameraSettingsToAll();
 
@@ -149,6 +157,8 @@ namespace RealVisionLab
 				cam_var = new bool[camString.Split('/').Length];
 				oran = new float[camString.Split('/').Length, 2];
 				cam = new VideoCaptureDevice[camString.Split('/').Length];
+				// Created before Cam_adjust starts the cameras (New_Frame stores into it).
+				frameBuffer = new FrameBuffer(cam.Length);
 
 				visibility(false);
 				Cam_adjust();
@@ -163,7 +173,7 @@ namespace RealVisionLab
 			}
 			catch(Exception ex)
 			{
-				tx_debug.Text = ex.ToString() + "\r\n";
+				UiLog(ex.ToString() + "\r\n");
 			}
 		}
 		private void MainPage_Load(object sender, EventArgs e)
@@ -230,7 +240,7 @@ namespace RealVisionLab
 			}
 			catch(Exception ex)
 			{
-				tx_debug.Text = ex.ToString() + "\r\n";
+				UiLog(ex.ToString() + "\r\n");
 			}
 		}
 		public void Label_adjust(Color color)
@@ -355,7 +365,7 @@ namespace RealVisionLab
 			}
 			catch(Exception ex)
 			{
-				tx_debug.Text = ex.ToString() + "\r\n";
+				UiLog(ex.ToString() + "\r\n");
 			}
 		}
 		public void Cam_adjust()
@@ -408,7 +418,7 @@ namespace RealVisionLab
 						}
 						catch(Exception ex)
 						{
-							tx_debug.Text = ex.ToString() + "\r\n";
+							UiLog(ex.ToString() + "\r\n");
 						}
 					}
 					if(cam[i] != null && cam[i].IsRunning)
@@ -427,7 +437,7 @@ namespace RealVisionLab
 			}
 			catch(Exception ex)
 			{
-				tx_debug.Text = ex.ToString() + "\r\n";
+				UiLog(ex.ToString() + "\r\n");
 			}
 		}
 		private async void Reset()
@@ -469,7 +479,7 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		private void Uart_connect()
@@ -519,7 +529,7 @@ namespace RealVisionLab
 									}
 									catch(Exception ex)
 									{
-										tx_debug.Text = ex.ToString() + "\r\n";
+										UiLog(ex.ToString() + "\r\n");
 									}
 								}
 								else
@@ -562,7 +572,7 @@ namespace RealVisionLab
 								}
 								catch(Exception ex)
 								{
-									tx_debug.Text = ex.ToString() + "\r\n";
+									UiLog(ex.ToString() + "\r\n");
 								}
 							}
 						}
@@ -579,7 +589,7 @@ namespace RealVisionLab
 			}
 			catch(Exception ex)
 			{
-				tx_debug.Text = ex.ToString() + "\r\n";
+				UiLog(ex.ToString() + "\r\n");
 			}
 			if(Settings.Default.PlcEnable)
 			{
@@ -633,7 +643,7 @@ namespace RealVisionLab
 			}
 			catch(Exception ex)
 			{
-				tx_debug.Text = ex.ToString() + "\r\n";
+				UiLog(ex.ToString() + "\r\n");
 			}
 		}
 		public void visibility(bool vis)
@@ -653,65 +663,55 @@ namespace RealVisionLab
 			}
 			catch(Exception ex)
 			{
-				tx_debug.Text = ex.ToString() + "\r\n";
+				UiLog(ex.ToString() + "\r\n");
 			}
 		}
-		Bitmap newFrame = null;
+		// Runs on the AForge camera thread (one per camera). Never touches UI controls directly (T06).
 		private void New_Frame(object sender, NewFrameEventArgs e)
 		{
 			try
 			{
-				if(takePhoto == null)
+				VideoCaptureDevice[] cams = cam;
+				int camIndex = cams == null ? -1 : Array.IndexOf(cams, sender as VideoCaptureDevice);
+				if(camIndex < 0) return;
+
+				// Inspection input: latest frame of this camera. With a test photo (debug 'sec' button)
+				// the photo replaces the camera image, as before T06.
+				Bitmap photo = takePhoto;
+				if(photo == null)
 				{
-					if(capture && sender == cam[caming_id])
-					{
-						// Eski nesneleri serbest bırak
-						if(pb_scene.Image != null)
-						{
-							pb_scene.Image.Dispose();
-						}
-
-						if(newFrame != null)
-						{
-							newFrame.Dispose();
-							newFrame = null;
-						}
-
-						// Yeni Bitmap nesnesini oluştur
-						using(Bitmap tempFrame = (Bitmap)e.Frame.Clone())
-						{
-							newFrame = new Bitmap(tempFrame);
-
-							if(gThrs)
-							{
-								// Threshold uygulaması
-								Threshold_Apply(newFrame, gthresint, renk);
-							}
-							else
-							{
-								pb_scene.Image = (Bitmap)newFrame.Clone(); // Kopyalama yaparak referans sorunlarını önleyin
-							}
-						}
-
-						capture = false;
-					}
+					frameBuffer.Store(camIndex, e.Frame);
 				}
 				else
 				{
-					if(gThrs)
+					// Several camera threads may copy the same photo; GDI+ bitmaps are not thread-safe.
+					lock(takePhotoLock)
 					{
-						// Threshold uygulaması
-						Threshold_Apply(takePhoto, gthresint, renk);
+						frameBuffer.Store(camIndex, photo);
 					}
-					else
+				}
+
+				// Display: one frame per capture request, from the camera being shown (as before T06).
+				if(capture && camIndex == caming_id)
+				{
+					capture = false;
+					Bitmap display = frameBuffer.GetLatest(camIndex);
+					if(display != null)
 					{
-						pb_scene.Image = takePhoto; // Kopyalama yaparak referans sorunlarını önleyin
+						if(gThrs)
+						{
+							// Threshold uygulaması (display only)
+							Bitmap thresholded = Threshold_Apply(display, gthresint, renk);
+							display.Dispose();
+							display = thresholded;
+						}
+						ShowScene(display);
 					}
 				}
 			}
 			catch(Exception ex)
 			{
-				tx_debug.Text = ex.ToString() + "\r\n";
+				UiLog(ex.ToString() + "\r\n");
 			}
 		}
 
@@ -885,7 +885,7 @@ namespace RealVisionLab
 			}
 			catch(Exception ex)
 			{
-				tx_debug.Text = ex.ToString() + "\r\n";
+				UiLog(ex.ToString() + "\r\n");
 			}
 		}
 
@@ -924,15 +924,17 @@ namespace RealVisionLab
 					// Deadline = max(Bekleme[1] * 5, 5000) ms. On timeout every ROI of this camera is marked NOK below.
 					int frameWaitMs = Math.Max(int.Parse(bekleme[1]) * 5, 5000);
 					Stopwatch frameWatch = Stopwatch.StartNew();
+					// T06: the frame comes from FrameBuffer (not pb_scene.Image) and must have arrived after
+					// this request (sequence > requestSeq), i.e. after Lamba/Piston on + Bekleme[0].
+					long requestSeq = frameBuffer.GetSequence(c);
 					do
 					{
 						capture = true;
 						await Task.Delay(int.Parse(bekleme[1]));
-						try
-						{
-							bitmap[c] = new Bitmap(pb_scene.Image);
-						}
-						catch(Exception) { }
+						long frameSeq;
+						Bitmap latest = frameBuffer.GetLatest(c, out frameSeq);
+						if(latest != null && frameSeq > requestSeq) bitmap[c] = latest;
+						else latest?.Dispose();
 					}
 					while(bitmap[c] == null && frameWatch.ElapsedMilliseconds < frameWaitMs);
 					// T05: the timer is stopped while scanning, so the I/O connection is checked at the await points.
@@ -1008,6 +1010,7 @@ namespace RealVisionLab
 							if(roiInFrame)
 							{
 							bmp[i] = new Bitmap(bitmap[c].Clone(Rect[i], PixelFormat.Format24bppRgb));
+							scanFrameSize = bitmap[c].Size;
 							await Task.Run(async () =>
 							{
 								if(yon)
@@ -1052,7 +1055,7 @@ namespace RealVisionLab
 												Pen p = new Pen(blk, 200);
 												g.DrawLine(p, 0, Rect[i].Y + (int)y1 + 100, bitmap[c].Width, Rect[i].Y + (int)y2 + 100);
 											}
-											pb_scene.Image = bitmap[c];
+											ShowScene(new Bitmap(bitmap[c])); // display copy; bitmap[c] stays owned by Islemler (T06)
 										}
 										else if(islem_id == 12)
 											Iki_Siyah_Arasi_Mesafe_Dik(bmp[i], i, c);
@@ -1069,9 +1072,9 @@ namespace RealVisionLab
 										else if(islem_id == 18)
 											Qr_Okuyucu(bmp[i], i, c);
 										else if(islem_id == 19)
-											Btn_bekle(bmp[i], i, c);
+											await Btn_bekle(bmp[i], i, c);
 										else if(islem_id == 20)
-											Qr_Oku_harici(bmp[i], i, c);
+											await Qr_Oku_harici(bmp[i], i, c);
 
 									}
 									else hata[c, i] = false;
@@ -1115,7 +1118,7 @@ namespace RealVisionLab
 											Pen p = new Pen(blk, 200);
 											g.DrawLine(p, 0, Rect[i].Y + (int)y1 + 100, bitmap[c].Width, Rect[i].Y + (int)y2 + 100);
 										}
-										pb_scene.Image = bitmap[c];
+										ShowScene(new Bitmap(bitmap[c])); // display copy; bitmap[c] stays owned by Islemler (T06)
 									}
 									else if(islem_id == 12)
 										Iki_Siyah_Arasi_Mesafe_Dik(bmp[i], i, c);
@@ -1132,9 +1135,9 @@ namespace RealVisionLab
 									else if(islem_id == 18)
 										Qr_Okuyucu(bmp[i], i, c);
 									else if(islem_id == 19)
-										Btn_bekle(bmp[i], i, c);
+										await Btn_bekle(bmp[i], i, c);
 									else if(islem_id == 20)
-										Qr_Oku_harici(bmp[i], i, c);
+										await Qr_Oku_harici(bmp[i], i, c);
 								}
 							});
 							} // if(roiInFrame) - dispatch body intentionally not re-indented (T11 refactors the dispatch)
@@ -1200,7 +1203,7 @@ namespace RealVisionLab
 								lbl_alarm.ForeColor = red;
 							}
 							if(nokFrame != null)
-								pb_scene.Image = nokFrame;
+								ShowScene(new Bitmap(nokFrame));
 							if(reseting)
 							{
 								await Task.Delay(int.Parse(bekleme[8]));
@@ -1285,7 +1288,7 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 				txt_qr.Text = "!" + exception.ToString();
 				// T05: outputs to the safe state before anything else (Reset() below also writes all-off).
 				ForceSafeState();
@@ -1354,7 +1357,7 @@ namespace RealVisionLab
 			catch(Exception ex)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = ex.ToString() + "\r\n";
+				UiLog(ex.ToString() + "\r\n");
 			}
 		}
 		//1-
@@ -1400,7 +1403,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//2-
@@ -1442,7 +1445,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//3-
@@ -1484,7 +1487,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//4-
@@ -1532,7 +1535,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//5-
@@ -1580,7 +1583,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//6-
@@ -1649,7 +1652,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//7-
@@ -1717,7 +1720,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//8-
@@ -1775,7 +1778,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//9-
@@ -1828,7 +1831,9 @@ namespace RealVisionLab
 						PointF c1 = new PointF(Rect[i].X, Rect[i].Y);
 						PointF c2 = TransformPoint(a1, b1, c1, a2, b2);
 
-						if(c2.X < 0) c2.X = 0; if(c2.Y < 0) c2.Y = 0; if(c2.X > pb_scene.Image.Width) c2.X = pb_scene.Image.Width - Rect[i].Width; if(c2.Y > pb_scene.Image.Height) c2.Y = pb_scene.Image.Height - Rect[i].Height;
+						// T06: frame size of the inspected camera image (was pb_scene.Image, which showed that frame).
+						Size frameSize = scanFrameSize;
+						if(c2.X < 0) c2.X = 0; if(c2.Y < 0) c2.Y = 0; if(c2.X > frameSize.Width) c2.X = frameSize.Width - Rect[i].Width; if(c2.Y > frameSize.Height) c2.Y = frameSize.Height - Rect[i].Height;
 
 						Rect[i].X = (int)c2.X; Rect[i].Y = (int)c2.Y;
 					}
@@ -1845,7 +1850,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//10-
@@ -1981,15 +1986,17 @@ namespace RealVisionLab
 
 				if(rectString[r_n].Split(',')[10].Split('*').Length > 1) turuncuUst = int.Parse(rectString[r_n].Split(',')[10].Split('*')[1]) * 1000;
 
-				rotuzunlukvisible = true;
-
-
 				Ofset[r_n, 1] = turuncuUst - ((solKenarOrt - sagKenarOrt) * hassasiyet);
 				double ofsettt = (double)Ofset[r_n, 1] / 1000;
-				if(RotUzunluk.Text == "")
-					RotUzunluk.Text = "SağKol : " + ofsettt.ToString("0.0");
-				else
-					RotUzunluk.Text = RotUzunluk.Text + " - SolKol : " + ofsettt.ToString("0.0");
+				// T06: read-modify-write of RotUzunluk on the UI thread (posts run in call order).
+				RunOnUi(() =>
+				{
+					rotuzunlukvisible = true;
+					if(RotUzunluk.Text == "")
+						RotUzunluk.Text = "SağKol : " + ofsettt.ToString("0.0");
+					else
+						RotUzunluk.Text = RotUzunluk.Text + " - SolKol : " + ofsettt.ToString("0.0");
+				});
 
 				if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
 				else hata[c_n, r_n] = true;
@@ -1998,7 +2005,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//11-
@@ -2040,7 +2047,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//12-
@@ -2089,7 +2096,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//13-
@@ -2142,7 +2149,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//14-
@@ -2195,7 +2202,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//15-
@@ -2236,7 +2243,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//16-
@@ -2277,7 +2284,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//17-
@@ -2291,7 +2298,7 @@ namespace RealVisionLab
 				if(g1 < 0 || g2 < 0 || g1 >= Ofset.GetLength(0) || g2 >= Ofset.GetLength(0))
 				{
 					hata[c_n, r_n] = true;
-					tx_debug.Text = $"ROI {r_n} Iki_method_arasi_fark: referans ROI indeksi geçersiz (g1={g1}, g2={g2}, ROI sayısı={Ofset.GetLength(0)}) - {DateTime.Now:HH:mm:ss.fff}";
+					UiLog($"ROI {r_n} Iki_method_arasi_fark: referans ROI indeksi geçersiz (g1={g1}, g2={g2}, ROI sayısı={Ofset.GetLength(0)}) - {DateTime.Now:HH:mm:ss.fff}");
 					return;
 				}
 				int m1 = Ofset[g1, 1];
@@ -2306,7 +2313,7 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//18-
@@ -2320,8 +2327,8 @@ namespace RealVisionLab
 				{
 					// Part name must be "<isim>-<aranan metin>"; without it nothing can be verified => NOK.
 					hata[c_n, r_n] = true;
-					txt_qr.Text = "QR: parça adında '-' yok";
-					tx_debug.Text = $"ROI {r_n} Qr_Okuyucu: parça adı '{find_text}' içinde '-' sonrası aranan metin yok - {DateTime.Now:HH:mm:ss.fff}";
+					SetQrText("QR: parça adında '-' yok");
+					UiLog($"ROI {r_n} Qr_Okuyucu: parça adı '{find_text}' içinde '-' sonrası aranan metin yok - {DateTime.Now:HH:mm:ss.fff}");
 					return;
 				}
 
@@ -2343,11 +2350,11 @@ namespace RealVisionLab
 				if(result != null)
 				{
 					hata[c_n, r_n] = result.Text.Contains(findParts[1]) ? false : true;
-					txt_qr.Text = "QR: " + result.Text + " " + findParts[1];
+					SetQrText("QR: " + result.Text + " " + findParts[1]);
 				}
 				else
 				{
-					txt_qr.Text = "QR: okunamadı " + findParts[1];
+					SetQrText("QR: okunamadı " + findParts[1]);
 					hata[c_n, r_n] = true;
 				}
 
@@ -2356,17 +2363,18 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//19-
-		private void Btn_bekle(Bitmap bitmap, int r_n, int c_n)
+		// T06: async (await Task.Delay instead of Thread.Sleep on the thread pool). The unused per-tick copy
+		// of pb_scene.Image was removed; capture = true still keeps the live view refreshing while waiting.
+		private async Task Btn_bekle(Bitmap bitmap, int r_n, int c_n)
 		{
 			try
 			{
 				buton = false;
-				lbl_alarm.Text = "BEKLENİYOR";
-				lbl_alarm.ForeColor = org;
+				SetAlarm("BEKLENİYOR", org);
 				if(plcIo.IsConnected)
 				{
 					// PLC only (UART untouched), as before T04: Lamba, Piston, Lazer(boş) on; Kaşe off.
@@ -2375,18 +2383,10 @@ namespace RealVisionLab
 				bool basildi = false;
 				for(int i = 0; i < Thrs[r_n] * 10; i++)
 				{
-					bitmap = null;
-
-
 					capture = true;
-					try
-					{
-						bitmap = new Bitmap(pb_scene.Image);
-					}
-					catch(Exception) { }
 
 					if(buton) i = Thrs[r_n] * 10;
-					Thread.Sleep(100);
+					await Task.Delay(100).ConfigureAwait(false);
 
 					if(plcIo.IsConnected)
 					{
@@ -2412,12 +2412,16 @@ namespace RealVisionLab
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
 		}
 		//20-
-		private void Qr_Oku_harici(Bitmap bitmap, int r_n, int c_n)
+		// T06: the keyboard-wedge input is delivered by password_KeyDown (UI thread) through an
+		// ExternalQrWait (TaskCompletionSource) instead of polling txt_qr.Text with Thread.Sleep and a message pump call from the thread pool.
+		// Timing kept: Bekleme[9] * 10 ticks of 100 ms; >20 ticks with non-matching input => NOK.
+		private async Task Qr_Oku_harici(Bitmap bitmap, int r_n, int c_n)
 		{
+			ExternalQrWait wait = null;
 			try
 			{
 				string find_text = rectString[r_n].Split(',')[10];
@@ -2426,13 +2430,20 @@ namespace RealVisionLab
 				{
 					// Part name must be "<isim>-<aranan metin>"; checked before any output is driven => NOK.
 					hata[c_n, r_n] = true;
-					tx_debug.Text = $"ROI {r_n} Qr_Oku_harici: parça adı '{find_text}' içinde '-' sonrası aranan metin yok - {DateTime.Now:HH:mm:ss.fff}";
+					UiLog($"ROI {r_n} Qr_Oku_harici: parça adı '{find_text}' içinde '-' sonrası aranan metin yok - {DateTime.Now:HH:mm:ss.fff}");
 					return;
 				}
+				int maxTicks = int.Parse(Settings.Default.Bekleme.Split('-')[9]) * 10;
 
-				txt_qr.Text = "";
-				lbl_alarm.Text = "BEKLENİYOR...";
-				lbl_alarm.ForeColor = org;
+				// Clear the input and arm the wait in one UI-thread step, so no keystroke falls in between.
+				wait = new ExternalQrWait(findParts[1]);
+				ExternalQrWait armed = wait;
+				if(!RunOnUi(() => { txt_qr.Text = ""; externalQrWait = armed; }))
+				{
+					hata[c_n, r_n] = true; // UI gone: nothing can be read => NOK
+					return;
+				}
+				SetAlarm("BEKLENİYOR...", org);
 				if(plcIo.IsConnected)
 				{
 					// PLC only (UART untouched), as before T04: Lamba, Piston, Lazer(boş) on; Kaşe off.
@@ -2441,28 +2452,62 @@ namespace RealVisionLab
 
 				int qrCounter = 0;
 				int qrErCount = 0;
-				string gelen = "";
 
 				// Fail-closed: OK only when the expected text arrives; timeout or >20 wrong reads stay NOK.
-				while(qrCounter < (int.Parse(Settings.Default.Bekleme.Split('-')[9]) * 10))
+				while(qrCounter < maxTicks)
 				{
 					capture = true;
-					gelen = txt_qr.Text;
-					if(gelen.Contains(findParts[1])) { hata[c_n, r_n] = false; break; }
+					if(wait.Result.Task.IsCompleted) break;
 					qrCounter++;
-					if(gelen != "") { qrErCount++; }
-					if(qrErCount > 20) { hata[c_n, r_n] = true; break; }
-					Thread.Sleep(100);
-					Application.DoEvents();
-
+					if(wait.InputSeen) { qrErCount++; }
+					if(qrErCount > 20) break;
+					await Task.WhenAny(wait.Result.Task, Task.Delay(100)).ConfigureAwait(false);
 				}
-				txt_qr.Text = "";
+
+				// The key handler completes the TCS only with text that contains the expected value.
+				string gelen = wait.Result.Task.IsCompleted ? wait.Result.Task.Result : null;
+				hata[c_n, r_n] = !(gelen != null && gelen.Contains(findParts[1]));
 			}
 			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 			}
+			finally
+			{
+				if(wait != null)
+				{
+					ExternalQrWait done = wait;
+					RunOnUi(() =>
+					{
+						if(externalQrWait == done) externalQrWait = null;
+						txt_qr.Text = "";
+					});
+				}
+			}
+		}
+
+		/// <summary>Pending external (keyboard wedge) QR read. Fields other than Result are set on the UI thread.</summary>
+		private sealed class ExternalQrWait
+		{
+			public ExternalQrWait(string expected) { Expected = expected; }
+			public readonly string Expected;
+			public readonly TaskCompletionSource<string> Result =
+				new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+			// Set when non-matching input arrived (pre-T06: txt_qr.Text != "").
+			public volatile bool InputSeen;
+		}
+
+		// Armed/disarmed on the UI thread only; read by password_KeyDown (UI thread).
+		private ExternalQrWait externalQrWait;
+
+		/// <summary>UI thread: feeds keyboard-wedge text to a pending Qr_Oku_harici wait.</summary>
+		private void OnExternalQrInput(string text)
+		{
+			ExternalQrWait wait = externalQrWait;
+			if(wait == null || string.IsNullOrEmpty(text)) return;
+			if(text.Contains(wait.Expected)) wait.Result.TrySetResult(text);
+			else wait.InputSeen = true;
 		}
 
 		// Tarama Fonksiyonları Bitiş ------------------------------------------------------------------------------
@@ -2591,14 +2636,115 @@ namespace RealVisionLab
 			return false;
 		}
 
-		/// <summary>Writes outputs; on failure the error goes to port_text (as before T04).</summary>
+		/// <summary>Writes outputs; on failure the error goes to port_text (as before T04). Callable from any thread.</summary>
 		private void WriteOutputs(IMachineIo target, MachineOutputs outputs)
 		{
 			string error;
 			if(!target.TryWriteOutputs(outputs, out error))
 			{
-				port_text.Text = error;
+				RunOnUi(() => port_text.Text = error);
 			}
+		}
+
+		// UI marshaling (T06) ----------------------------------------------------------------------------------
+
+		/// <summary>
+		/// Runs <paramref name="action"/> on the UI thread: directly when already there, otherwise posted
+		/// with BeginInvoke (never blocks the caller, so camera threads cannot deadlock with FormClosing).
+		/// Returns false when the form has no handle (not yet created / disposed) and nothing was run.
+		/// Exceptions inside the action are logged to debug.txt, not raised to Application.ThreadException.
+		/// </summary>
+		private bool RunOnUi(Action action)
+		{
+			if(Thread.CurrentThread.ManagedThreadId == uiThreadId)
+			{
+				RunUiActionSafe(action);
+				return true;
+			}
+			if(IsDisposed || Disposing || !IsHandleCreated) return false;
+			try
+			{
+				BeginInvoke((Action)(() => RunUiActionSafe(action)));
+				return true;
+			}
+			catch(InvalidOperationException) { return false; } // handle destroyed meanwhile
+			catch(ObjectDisposedException) { return false; }
+		}
+
+		private static void RunUiActionSafe(Action action)
+		{
+			try
+			{
+				action();
+			}
+			catch(Exception ex)
+			{
+				AppendDebugFile("UI update error: " + ex);
+			}
+		}
+
+		/// <summary>Writes tx_debug (and therefore debug.txt via Tx_debug_TextChanged) from any thread.</summary>
+		private void UiLog(string text)
+		{
+			if(!RunOnUi(() => tx_debug.Text = text))
+			{
+				AppendDebugFile(text); // no UI yet/anymore: keep the message
+			}
+		}
+
+		/// <summary>Sets lbl_alarm text and color from any thread.</summary>
+		private void SetAlarm(string text, Color color)
+		{
+			RunOnUi(() =>
+			{
+				lbl_alarm.Text = text;
+				lbl_alarm.ForeColor = color;
+			});
+		}
+
+		/// <summary>Sets txt_qr from any thread.</summary>
+		private void SetQrText(string text)
+		{
+			RunOnUi(() => txt_qr.Text = text);
+		}
+
+		/// <summary>
+		/// Shows <paramref name="image"/> in pb_scene. Takes ownership of <paramref name="image"/>; the previous
+		/// display image is disposed on the UI thread only, after it has been replaced. Callable from any thread.
+		/// </summary>
+		private void ShowScene(Bitmap image)
+		{
+			if(image == null) return;
+			bool posted = RunOnUi(() =>
+			{
+				if(pb_scene.IsDisposed)
+				{
+					image.Dispose();
+					return;
+				}
+				System.Drawing.Image old = pb_scene.Image;
+				pb_scene.Image = image;
+				if(old != null && !ReferenceEquals(old, image)) old.Dispose();
+			});
+			if(!posted) image.Dispose();
+		}
+
+		private static readonly object debugFileLock = new object();
+
+		/// <summary>Appends a line to debug.txt (same format as Tx_debug_TextChanged). Never throws.</summary>
+		private static void AppendDebugFile(string text)
+		{
+			try
+			{
+				lock(debugFileLock)
+				{
+					using(StreamWriter writer = File.AppendText("debug.txt"))
+					{
+						writer.WriteLine($"{DateTime.Now} - Hata Kodu: {text}");
+					}
+				}
+			}
+			catch(Exception) { }
 		}
 		static PointF TransformPoint(PointF a1, PointF b1, PointF c1, PointF a2, PointF b2)
 		{
@@ -2613,7 +2759,8 @@ namespace RealVisionLab
 
 			return new PointF(c2X, c2Y);
 		}
-		public void Threshold_Apply(Bitmap orjbitmaps, int threshold, int renk)
+		/// <summary>Returns a thresholded copy of <paramref name="orjbitmaps"/> (owned by the caller). Display only.</summary>
+		public Bitmap Threshold_Apply(Bitmap orjbitmaps, int threshold, int renk)
 		{
 
 			// Orijinal bitmap'i yeni bir bitmap'e kopyala
@@ -2692,7 +2839,7 @@ namespace RealVisionLab
 			Marshal.Copy(pixels, 0, ptrFirstPixel, pixels.Length);
 			bitmap.UnlockBits(bitmapData);
 
-			pb_scene.Image = bitmap;
+			return bitmap;
 		}
 
 		// Pencere İle İlgili Olaylar Başlangıç ---------------------------------------------------------------------
@@ -2719,6 +2866,8 @@ namespace RealVisionLab
 					cam[i].WaitForStop();
 				}
 			}
+			// T06: cameras are stopped, no more Store calls.
+			frameBuffer?.Dispose();
 			SaveAllCameraSettingsToXml();
 		}
 		private void pb_RealTekno_Click(object sender, EventArgs e)
@@ -2747,25 +2896,14 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
-				tx_debug.Text = exception.ToString();
+				UiLog(exception.ToString());
 				timer.Start();
 			}
 		}
 		private void Tx_debug_TextChanged(object sender, EventArgs e)
 		{
-			string newValue = tx_debug.Text;
-			try
-			{
-				// debug.txt dosyasına ekleme yapma ve kaydetme işlemi
-				using(StreamWriter writer = File.AppendText("debug.txt"))
-				{
-					writer.WriteLine($"{DateTime.Now} - Hata Kodu: {newValue}");
-				}
-			}
-			catch(Exception ex)
-			{
-				Console.WriteLine("Hata: " + ex.Message);
-			}
+			// debug.txt dosyasına ekleme (T06: shared writer with a lock, same line format).
+			AppendDebugFile(tx_debug.Text);
 
 		}
 		private void Uart_to_IO_DataReceived(object sender, SerialDataReceivedEventArgs e)
@@ -2780,7 +2918,7 @@ namespace RealVisionLab
 					string uartError;
 					if(!uartPort.TryReceive(out uartInputs, out boolDizisi, out uartError))
 					{
-						tx_debug.Text = "DataReceived Error: " + uartError;
+						UiLog("DataReceived Error: " + uartError);
 						return;
 					}
 					if(uartInputs.Start && !islem)
@@ -2791,21 +2929,23 @@ namespace RealVisionLab
 					{
 						rst_buton = true;
 					}
-					if(Application.OpenForms.OfType<Property>().Any())
+					// Runs on the SerialPort thread: the Property display is updated on the UI thread (T06).
+					string de = "";
+					for(int i = 0; i < 8; i++)
 					{
-						string de = "";
-						for(int i = 0; i < 8; i++)
-						{
-							if(boolDizisi[i]) de += "1";
-							else de += "0";
-						}
-						if(set != null) set.txt_recData.Text = de;
+						if(boolDizisi[i]) de += "1";
+						else de += "0";
 					}
+					RunOnUi(() =>
+					{
+						if(Application.OpenForms.OfType<Property>().Any() && set != null && !set.IsDisposed)
+							set.txt_recData.Text = de;
+					});
 				}
 			}
 			catch(Exception ex)
 			{
-				tx_debug.Text = "DataReceived Error: " + ex.Message;
+				UiLog("DataReceived Error: " + ex.Message);
 			}
 		}
 		private void password_KeyDown(object sender, KeyEventArgs e)
@@ -2813,6 +2953,8 @@ namespace RealVisionLab
 			if(txt_qr.Text.Length > 75) txt_qr.Text = "QR:";
 			if(e.KeyCode == Keys.Enter)
 			{
+				// T06: the completed line goes to a pending Qr_Oku_harici before the field is reset.
+				OnExternalQrInput(txt_qr.Text);
 				txt_qr.Text = "QR:";
 				if(!islem)
 				{
@@ -2834,6 +2976,7 @@ namespace RealVisionLab
 			else
 			{
 				txt_qr.Text += ((char)e.KeyValue);
+				OnExternalQrInput(txt_qr.Text);
 			}
 		}
 		bool qrExtern = false;
@@ -2896,7 +3039,9 @@ namespace RealVisionLab
 
 
 
-		Bitmap takePhoto;
+		// Test photo (debug). Read by the camera threads; copied under takePhotoLock.
+		volatile Bitmap takePhoto;
+		readonly object takePhotoLock = new object();
 		private void Photo_Click(object sender, EventArgs e)
 		{
 			if(pb_scene.Image != null)

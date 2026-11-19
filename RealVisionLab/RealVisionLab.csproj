@@ -161,6 +161,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="FrameBuffer.cs" />
     <Compile Include="Io\CompositeMachineIo.cs" />
     <Compile Include="Io\IMachineIo.cs" />
     <Compile Include="Io\MachineOutputs.cs" />
