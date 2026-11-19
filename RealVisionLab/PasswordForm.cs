@@ -19,6 +19,13 @@ namespace RealVisionLab
         {
             txt_password.Focus();
             isTrue = false;
+            if (Security.Credentials.NeedsInitialSetup())
+            {
+                // First use: no password exists yet, ask for one.
+                newPass = true;
+                label2.ForeColor = Color.Orange;
+                label2.Text = "İlk kullanım: yeni şifre belirleyin (4 haneli)";
+            }
         }
 
         private async void txt_password_KeyDown(object sender, KeyEventArgs e)
@@ -37,8 +44,7 @@ namespace RealVisionLab
                     }
                     else
                     {
-                        Properties.Settings.Default.userPassword = txt_password.Text.Trim();
-                        Properties.Settings.Default.Save();
+                        Security.Credentials.SetUserPassword(txt_password.Text.Trim());
                         label2.ForeColor = Color.Green;
                         label2.Text = "Şifre Başarıyla Güncellendi";
                         await Task.Delay(1500);
@@ -48,19 +54,20 @@ namespace RealVisionLab
                 }
                 else
                 {
-                    if (txt_password.Text == null || (txt_password.TextLength != 4 && txt_password.TextLength != 6))
+                    string text = txt_password.Text;
+                    if (string.IsNullOrEmpty(text))
                     {
                         label2.ForeColor = Color.Red;
-                        label2.Text = "Şifre boş olmamalı ve 4 haneli olmalıdır.";
+                        label2.Text = "Şifre boş olmamalıdır.";
                         await Task.Delay(1500);
                         Close();
                     }
                     else if (
-                            txt_password.Text.Substring(4) == "*+" &&
-                            txt_password.TextLength == 6 &&
+                            text.Length > 2 &&
+                            text.EndsWith("*+") &&
                                 (
-                                txt_password.Text.Substring(0, 4) == "2580" ||
-                                txt_password.Text.Substring(0, 4) == Properties.Settings.Default.userPassword
+                                Security.Credentials.VerifyUser(text.Substring(0, text.Length - 2)) ||
+                                Security.Credentials.VerifyServiceCode(text.Substring(0, text.Length - 2))
                                 )
                             )
                     {
@@ -71,7 +78,7 @@ namespace RealVisionLab
                     }
                     else
                     {
-                        if (Properties.Settings.Default.userPassword == txt_password.Text.Trim() || txt_password.Text.Trim() == "2580")
+                        if (Security.Credentials.VerifyUser(text.Trim()) || Security.Credentials.VerifyServiceCode(text.Trim()))
                         {
                             label2.ForeColor = Color.Green;
                             label2.Text = "Şifre doğru";

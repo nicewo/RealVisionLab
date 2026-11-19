@@ -13,9 +13,21 @@ namespace RealVisionLab
         /// <summary>
         /// Uygulamanın ana girdi noktası.
         /// </summary>
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern bool AttachConsole(int dwProcessId);
+
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
+            // T08: "RealVisionLab.exe --hash-password <value>" prints a hash (for serviceCodeHash) and exits.
+            if (args != null && args.Length >= 1 && args[0] == "--hash-password")
+            {
+                AttachConsole(-1);
+                if (args.Length < 2) Console.WriteLine("Kullanim: RealVisionLab.exe --hash-password <deger>");
+                else Console.WriteLine(Security.PasswordHasher.Hash(args[1]));
+                return;
+            }
+
             // Non-UI thread exceptions (e.g. camera NewFrame thread): log + outputs safe state (T05).
             AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
             Application.EnableVisualStyles();

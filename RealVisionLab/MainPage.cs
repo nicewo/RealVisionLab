@@ -2897,6 +2897,30 @@ namespace RealVisionLab
 		{
 			try
 			{
+				if(!debugMode)
+				{
+					// T08: the settings screen needs the operator password (Debug builds skip).
+					if(set != null && !set.IsDisposed) return;
+					PasswordForm pasw = new PasswordForm { Owner = this };
+					pasw.FormClosed += (s2, a2) =>
+					{
+						if(pasw.isTrue) OpenSettingsForm();
+					};
+					pasw.Show();
+					return;
+				}
+				OpenSettingsForm();
+			}
+			catch(Exception exception)
+			{
+				UiLog(exception.ToString());
+				timer.Start();
+			}
+		}
+		private void OpenSettingsForm()
+		{
+			try
+			{
 				visibility(true);
 				set = new Property(tab_index);
 				set.Owner = this;

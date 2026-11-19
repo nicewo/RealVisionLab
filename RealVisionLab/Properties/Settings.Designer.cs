@@ -62,13 +62,37 @@ namespace RealVisionLab.Properties {
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("1903")]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
         public string userPassword {
             get {
                 return ((string)(this["userPassword"]));
             }
             set {
                 this["userPassword"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string userPasswordHash {
+            get {
+                return ((string)(this["userPasswordHash"]));
+            }
+            set {
+                this["userPasswordHash"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string serviceCodeHash {
+            get {
+                return ((string)(this["serviceCodeHash"]));
+            }
+            set {
+                this["serviceCodeHash"] = value;
             }
         }
         

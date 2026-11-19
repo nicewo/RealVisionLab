@@ -1500,7 +1500,7 @@ namespace RealVisionLab
                 if (TryHandleSettingsResetCommand(txt_send.Text))
                 {
                 }
-                else if (txt_send.Text == "realtekno" || txt_send.Text == "2580")
+                else if (Security.Credentials.VerifyServiceCode(txt_send.Text))
                 {
                     //enable işlemi
                     Settings.Default.adminMode = true;
@@ -1591,7 +1591,7 @@ namespace RealVisionLab
                     if (TryHandleSettingsResetCommand(txt_send.Text))
                     {
                     }
-                    else if (txt_send.Text == "realtekno" || txt_send.Text == "2580")
+                    else if (Security.Credentials.VerifyServiceCode(txt_send.Text))
                     {
                         //enable işlemi
                         Settings.Default.adminMode = true;

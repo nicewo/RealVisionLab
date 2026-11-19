@@ -12,7 +12,13 @@
       <Value Profile="(Default)">0*403*0*0*0*0*-3</Value>
     </Setting>
     <Setting Name="userPassword" Type="System.String" Scope="User">
-      <Value Profile="(Default)">1903</Value>
+      <Value Profile="(Default)" />
+    </Setting>
+    <Setting Name="userPasswordHash" Type="System.String" Scope="User">
+      <Value Profile="(Default)" />
+    </Setting>
+    <Setting Name="serviceCodeHash" Type="System.String" Scope="User">
+      <Value Profile="(Default)" />
     </Setting>
     <Setting Name="productName" Type="System.String" Scope="User">
       <Value Profile="(Default)">RealVisionLab - Görüntü İşleme</Value>
