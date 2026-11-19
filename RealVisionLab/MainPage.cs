@@ -2,9 +2,11 @@
 using AForge.Video;
 using AForge.Video.DirectShow;
 using DirectShowLib;
+using RealVisionLab.Config;
 using RealVisionLab.Io;
 using RealVisionLab.Properties;
 using System;
+using System.Collections.Generic;
 using System.Data.Common;
 using System.Diagnostics;
 using System.Drawing;
@@ -125,8 +127,9 @@ namespace RealVisionLab
 			filePath = "",
 			qrCodeText;
 		public static string[]
-			rectString,
 			thrsString;
+		/// <summary>T09: ROI list of the running cycle (parsed once per cycle from Settings.Rect).</summary>
+		public static List<RoiConfig> rois;
 
 
 		//---------- Değişken Tanımlamaları Bitiş --------------------------------------------------------------------
@@ -150,12 +153,12 @@ namespace RealVisionLab
 
 				InitMachineIo();
 
-				string camString = Settings.Default.Cam;
-				Cam_no = new int[camString.Split('/').Length];
-				Cam_res = new int[camString.Split('/').Length];
-				cam_var = new bool[camString.Split('/').Length];
-				oran = new float[camString.Split('/').Length, 2];
-				cam = new VideoCaptureDevice[camString.Split('/').Length];
+				int camCount = LoadCameras().Count;
+				Cam_no = new int[camCount];
+				Cam_res = new int[camCount];
+				cam_var = new bool[camCount];
+				oran = new float[camCount, 2];
+				cam = new VideoCaptureDevice[camCount];
 				// Created before Cam_adjust starts the cameras (New_Frame stores into it).
 				frameBuffer = new FrameBuffer(cam.Length);
 
@@ -185,21 +188,7 @@ namespace RealVisionLab
 			{
 				if(File.Exists(filePath))
 				{
-					string fileContent = File.ReadAllText(filePath);
-					string[] contentString = fileContent.Split('/');
-					int id = 1;
-					if(fileContent.StartsWith("/"))
-					{
-						id++;
-					}
-
-					if(fileContent.EndsWith("/"))
-					{
-						id++;
-					}
-
-					tarama_count = int.Parse(contentString[contentString.Length - id].Split(',')[0].Split('-')[1]);
-					tarama_count++;
+					tarama_count = NextScanCountFromLog(File.ReadAllText(filePath));
 				}
 				else
 				{
@@ -220,6 +209,71 @@ namespace RealVisionLab
 				txt_qr2.Visible = false;
 			}
 		}
+		// ---- T09: typed settings (parsed here once per use; see Config/ConfigParser) ---------------------------------
+		private static readonly Dictionary<string, string> lastConfigErrors = new Dictionary<string, string>();
+
+		/// <summary>Writes validation errors to debug.txt and the alarm label once per distinct error set and source.</summary>
+		private void ReportConfigErrors(string source, List<string> errors)
+		{
+			string joined = string.Join(" | ", errors);
+			string previous;
+			lock(lastConfigErrors)
+			{
+				if(lastConfigErrors.TryGetValue(source, out previous) ? previous == joined : joined.Length == 0) return;
+				lastConfigErrors[source] = joined;
+			}
+			if(errors.Count == 0) return;
+			AppendDebugFile("Ayar hatası (geçersiz kayıtlar NOK sayılır): " + joined);
+			SetAlarm("Ayar hatası: " + errors.Count + " geçersiz kayıt (" + source + ")", red);
+		}
+
+		private List<CameraConfig> LoadCameras()
+		{
+			List<CameraConfig> cams;
+			List<string> errors;
+			ConfigParser.TryParseCameras(Settings.Default.Cam, out cams, out errors);
+			ReportConfigErrors("Cam", errors);
+			return cams;
+		}
+
+		/// <summary>Parsed ROI list. Invalid records are flagged (IsValid == false) and must be treated as NOK.</summary>
+		private List<RoiConfig> LoadRois()
+		{
+			List<RoiConfig> list;
+			List<string> errors;
+			ConfigParser.TryParseRois(Settings.Default.Rect, ConfigParser.ParseCameras(Settings.Default.Cam).Count, out list, out errors);
+			ReportConfigErrors("Rect", errors);
+			return list;
+		}
+
+		private WaitTimes LoadWaits()
+		{
+			WaitTimes w;
+			List<string> errors;
+			ConfigParser.TryParseWaitTimes(Settings.Default.Bekleme, out w, out errors);
+			ReportConfigErrors("Bekleme", errors);
+			return w;
+		}
+
+		/// <summary>
+		/// Daily log lines look like "Kamera 1 -N,..." separated by '/'. Returns last N + 1,
+		/// or 0 when the file is empty or its last record cannot be parsed. Never throws.
+		/// </summary>
+		internal static int NextScanCountFromLog(string fileContent)
+		{
+			if(string.IsNullOrWhiteSpace(fileContent)) return 0;
+			string[] records = fileContent.Split('/');
+			for(int i = records.Length - 1; i >= 0; i--)
+			{
+				if(string.IsNullOrWhiteSpace(records[i])) continue;
+				string[] head = records[i].Split(',')[0].Split('-');
+				int n;
+				if(head.Length > 1 && int.TryParse(head[1].Trim(), out n) && n >= 0 && n < int.MaxValue) return n + 1;
+				return 0;
+			}
+			return 0;
+		}
+
 		private void ClearControls()
 		{
 			try
@@ -246,14 +300,14 @@ namespace RealVisionLab
 		{
 			try
 			{
-				string[] rectString = Settings.Default.Rect.Split('/');
+				List<RoiConfig> roiList = LoadRois();
 				lbl_productName.Text = Settings.Default.productName;
-				if(Rect == null || rectString.Length != Rect.Length)
+				if(Rect == null || roiList.Count != Rect.Length)
 				{
 
 					ClearControls();
-					hata = new bool[cam.Length, rectString.Length];
-					Rect = new Rectangle[rectString.Length];
+					hata = new bool[cam.Length, roiList.Count];
+					Rect = new Rectangle[roiList.Count];
 					pbox = new PictureBox[Rect.Length];
 					bmp = new Bitmap[Rect.Length];
 					lbl = new Label[Rect.Length, 4];
@@ -262,7 +316,7 @@ namespace RealVisionLab
 
 
 
-					for(int r = 0; r < rectString.Length; r++)
+					for(int r = 0; r < roiList.Count; r++)
 					{
 						for(int c = 0; c < cam.Length; c++)
 						{
@@ -297,16 +351,17 @@ namespace RealVisionLab
 					}
 				}
 				int rect_cam;
-				for(int i = 0; i < rectString.Length; i++)
+				for(int i = 0; i < roiList.Count; i++)
 				{
-					Thrs[i] = int.Parse(rectString[i].Split(',')[8]);
-					Rect[i].X = int.Parse(rectString[i].Split(',')[0]);
-					Rect[i].Y = int.Parse(rectString[i].Split(',')[1]);
-					Rect[i].Width = int.Parse(rectString[i].Split(',')[2]);
-					Rect[i].Height = int.Parse(rectString[i].Split(',')[3]);
-					Ofset[i, 0] = int.Parse(rectString[i].Split(',')[4]);
-					Ofset[i, 2] = int.Parse(rectString[i].Split(',')[5]);
-					rect_cam = int.Parse(rectString[i].Split(',')[6]);
+					RoiConfig roi = roiList[i];
+					Thrs[i] = roi.Threshold;
+					Rect[i].X = roi.X;
+					Rect[i].Y = roi.Y;
+					Rect[i].Width = roi.Width;
+					Rect[i].Height = roi.Height;
+					Ofset[i, 0] = roi.MinOffset;
+					Ofset[i, 2] = roi.MaxOffset;
+					rect_cam = roi.CamId; // parser guarantees 0 <= CamId < camera count (invalid records fall back to 0)
 					//top
 					lbl[i, 0].Left = (int)(Rect[i].X / oran[rect_cam, 1]);
 					lbl[i, 0].Top = (int)(Rect[i].Y / oran[rect_cam, 0]);
@@ -371,12 +426,12 @@ namespace RealVisionLab
 		{
 			try
 			{
-				string camString = Settings.Default.Cam;
+				List<CameraConfig> camList = LoadCameras();
 
-				for(int i = 0; i < camString.Split('/').Length; i++)
+				for(int i = 0; i < camList.Count; i++)
 				{
-					Cam_no[i] = int.Parse(camString.Split('/')[i].Split(',')[0]);
-					Cam_res[i] = int.Parse(camString.Split('/')[i].Split(',')[1]);
+					Cam_no[i] = camList[i].CamIndex;
+					Cam_res[i] = camList[i].ResIndex;
 					if(Cam_no[i] < 0) Cam_no[i] = 0;
 					if(Cam_res[i] < 0) Cam_res[i] = 0;
 					capture = false;
@@ -446,14 +501,14 @@ namespace RealVisionLab
 				qrGelen.Visible = false;
 				qrGelen.Text = "";
 
-				string[] rectString = Settings.Default.Rect.Split('/');
+				int roiCount = LoadRois().Count;
 				buton = false;
 				capturing = true;
 				islem = false;
 
 				for(int c = 0; c < cam.Length; c++)
 				{
-					for(int i = 0; i < rectString.Length; i++)
+					for(int i = 0; i < roiCount; i++)
 					{
 						hata[c, i] = false;
 					}
@@ -470,7 +525,7 @@ namespace RealVisionLab
 				}
 
 				timer.Start();
-				await Task.Delay(int.Parse(Settings.Default.Bekleme.Split('-')[10]));
+				await Task.Delay(LoadWaits().AfterReset);
 				lbl_alarm.Text = "HAZIR";
 				lbl_alarm.ForeColor = org;
 				p_scene.BackColor = org;
@@ -634,10 +689,10 @@ namespace RealVisionLab
 			try
 			{
 				Label_adjust(org);
-				string[] rectStringv = Settings.Default.Rect.Split('/');
-				for(int i = 0; i < rectStringv.Length; i++)
+				List<RoiConfig> roiList = LoadRois();
+				for(int i = 0; i < roiList.Count; i++)
 				{
-					if(int.Parse(rectStringv[i].Split(',')[6]) == tab)
+					if(roiList[i].CamId == tab)
 					{
 						for(int j = 0; j < 4; j++)
 						{
@@ -666,8 +721,8 @@ namespace RealVisionLab
 			try
 			{
 				Label_adjust(org);
-				string[] rectStringv = Settings.Default.Rect.Split('/');
-				for(int i = 0; i < rectStringv.Length; i++)
+				int roiCount = LoadRois().Count;
+				for(int i = 0; i < roiCount; i++)
 				{
 					for(int j = 0; j < 4; j++)
 					{
@@ -917,14 +972,14 @@ namespace RealVisionLab
 				lbl_alarm.Text = "İşlem Başladı.";
 				Bitmap[] bitmap = new Bitmap[cam.Length];
 				bool isTrue = false;
-				string[] bekleme = Settings.Default.Bekleme.Split('-');
-				rectString = Settings.Default.Rect.Split('/');
+				WaitTimes bekleme = LoadWaits();
+				rois = LoadRois();
 
 				// Piston-Lamba => 1 ve 2 çıkış (UART and PLC)
 				WriteOutputs(io, new MachineOutputs(lamba: true, piston: true, kase: false, bos: false));
 
-				await Task.Delay(int.Parse(bekleme[0]));
-				// T05: the timer runs during bekleme[0] and may have aborted the cycle; I/O may also have dropped.
+				await Task.Delay(bekleme.LampPistonSettle);
+				// T05: the timer runs during bekleme[0] (LampPistonSettle) and may have aborted the cycle; I/O may also have dropped.
 				if(CycleAbortRequested()) return;
 
 				timer.Stop();
@@ -937,7 +992,7 @@ namespace RealVisionLab
 
 					// Bounded frame wait (fail-closed): never block the cycle forever when no frame arrives.
 					// Deadline = max(Bekleme[1] * 5, 5000) ms. On timeout every ROI of this camera is marked NOK below.
-					int frameWaitMs = Math.Max(int.Parse(bekleme[1]) * 5, 5000);
+					int frameWaitMs = Math.Max(bekleme.FramePoll * 5, 5000);
 					Stopwatch frameWatch = Stopwatch.StartNew();
 					// T06: the frame comes from FrameBuffer (not pb_scene.Image) and must have arrived after
 					// this request (sequence > requestSeq), i.e. after Lamba/Piston on + Bekleme[0].
@@ -945,7 +1000,7 @@ namespace RealVisionLab
 					do
 					{
 						capture = true;
-						await Task.Delay(int.Parse(bekleme[1]));
+						await Task.Delay(bekleme.FramePoll);
 						long frameSeq;
 						Bitmap latest = frameBuffer.GetLatest(c, out frameSeq);
 						if(latest != null && frameSeq > requestSeq) bitmap[c] = latest;
@@ -964,16 +1019,16 @@ namespace RealVisionLab
 					}
 					else
 					{
-						await Task.Delay(int.Parse(bekleme[2]));
+						await Task.Delay(bekleme.AfterFrame);
 					}
 
 					lbl_islemTime.Text = "Tarama Başladı." + "( " + (DateTime.Now - startTime).TotalMilliseconds + " ms)";
 					startTime = DateTime.Now;
 
-					for(int i = 0; i < rectString.Length; i++)
+					for(int i = 0; i < rois.Count; i++)
 					{
 						startTime = DateTime.Now;
-						if(caming_id == int.Parse(rectString[i].Split(',')[6]))
+						if(caming_id == rois[i].CamId)
 						{
 							// Fail-closed: every evaluated ROI starts as NOK. Each tarama function clears it
 							// (hata = false) only on a successful, in-range result; any exception, missing
@@ -983,14 +1038,15 @@ namespace RealVisionLab
 							// 19 (Btn_bekle, wait step) likewise clears hata on normal completion (pre-existing
 							// semantics: a timeout without button press was never a NOK).
 							hata[c, i] = true;
-							if(rectString[i].Split(',')[10].Contains("yön"))
+							string partName = rois[i].PartName;
+							if(partName.Contains("yön"))
 							{
 								yon_no[0] = c;
 								yon_no[1] = i;
 							}
 							if(i > 0)
 							{
-								if(rectString[i - 1].Split(',')[10].Contains("yön"))
+								if(rois[i - 1].PartName.Contains("yön"))
 								{
 									yon = true;
 									sagMi = hata[yon_no[0], yon_no[1]];
@@ -998,7 +1054,7 @@ namespace RealVisionLab
 
 								}
 							}
-							int islem_id = int.Parse(rectString[i].Split(',')[7]);
+							int islem_id = rois[i].Operation;
 							bmp[i]?.Dispose();
 							pbox[i].Image = null;
 							bmp[i] = null;
@@ -1007,7 +1063,13 @@ namespace RealVisionLab
 							// that is not fully inside the frame. Such an ROI (or a missing frame) stays NOK
 							// and its tarama function is skipped.
 							bool roiInFrame = false;
-							if(!frameMissing)
+							if(!rois[i].IsValid)
+							{
+								// T09: invalid settings record => NOK, never evaluated (already logged by LoadRois).
+								hata[c, i] = true;
+								tx_debug.Text = $"ROI {i} geçersiz ayar, NOK: {rois[i].Error} - {DateTime.Now:HH:mm:ss.fff}";
+							}
+							else if(!frameMissing)
 							{
 								Rectangle frameBounds = new Rectangle(0, 0, bitmap[c].Width, bitmap[c].Height);
 								Rectangle roiClip = Rectangle.Intersect(Rect[i], frameBounds);
@@ -1030,8 +1092,8 @@ namespace RealVisionLab
 							{
 								if(yon)
 								{
-									if((sagMi && (rectString[i].Split(',')[10].Contains("R-") || rectString[i].Split(',')[10].Contains("islem")))
-												|| (!sagMi && (rectString[i].Split(',')[10].Contains("L-") || rectString[i].Split(',')[10].Contains("islem"))))
+									if((sagMi && (partName.Contains("R-") || partName.Contains("islem")))
+												|| (!sagMi && (partName.Contains("L-") || partName.Contains("islem"))))
 									{
 										if(islem_id == 0)
 											Kırmızı_say(bmp[i], i, c);
@@ -1058,7 +1120,7 @@ namespace RealVisionLab
 										else if(islem_id == 11)
 										{
 											Audi_alttan_uzat(bmp[i], i, c);
-											await Task.Delay(int.Parse(bekleme[3]));
+											await Task.Delay(bekleme.AudiExtend);
 											double dx = Ofset[i, 2];
 											double dy = (Ofset[i, 1]) - (Ofset[i, 0]);
 											double m = dy / dx;
@@ -1121,7 +1183,7 @@ namespace RealVisionLab
 									else if(islem_id == 11)
 									{
 										Audi_alttan_uzat(bmp[i], i, c);
-										await Task.Delay(int.Parse(bekleme[3]));
+										await Task.Delay(bekleme.AudiExtend);
 										double dx = Ofset[i, 2];
 										double dy = (Ofset[i, 1]) - (Ofset[i, 0]);
 										double m = dy / dx;
@@ -1166,7 +1228,7 @@ namespace RealVisionLab
 								time = (DateTime.Now - startTime).TotalMilliseconds.ToString().Split(',')[0];
 							lbl_islemTime.Text = Property.list[islem_id] + "( " + time + " ms)";
 
-							txtReport += "Kamera " + (int.Parse(rectString[i].Split(',')[6]) + 1) + " -" + tarama_count + "," + rectbno + "-" + time + "ms" + "," + hata[c, i] + "," + Ofset[i, 0] + "," + Ofset[i, 1] + "," + Ofset[i, 2] + "/";
+							txtReport += "Kamera " + (rois[i].CamId + 1) + " -" + tarama_count + "," + rectbno + "-" + time + "ms" + "," + hata[c, i] + "," + Ofset[i, 0] + "," + Ofset[i, 1] + "," + Ofset[i, 2] + "/";
 							rectbno++;
 
 							startTime = DateTime.Now;
@@ -1177,7 +1239,7 @@ namespace RealVisionLab
 
 					bool reseting = false;
 					int hataliKamera = 0;
-					for(int r = 0; r < rectString.Length; r++)
+					for(int r = 0; r < rois.Count; r++)
 					{
 						if(hata[c, r])
 						{
@@ -1200,14 +1262,14 @@ namespace RealVisionLab
 						using(Graphics g = nokFrame != null ? Graphics.FromImage(nokFrame) : null)
 						{
 							Pen pen = new Pen(red);
-							for(int i = 0; i < rectString.Length; i++)
+							for(int i = 0; i < rois.Count; i++)
 							{
 								if(hata[hataliKamera, i])
 								{
 									g?.DrawImage(Resources.carpi, (Rect[i].X + (Rect[i].Width - 75) / 2), (Rect[i].Y + (Rect[i].Height - 75) / 2), 75, 75);
-									lbl_alarm.Text += rectString[i].Split(',')[10] + " - ";
+									lbl_alarm.Text += (rois[i].IsValid ? rois[i].PartName : "Ayar hatası (ROI " + (i + 1) + ")") + " - ";
 									lbl_alarm.ForeColor = red;
-									reseting = !bool.Parse(rectString[i].Split(',')[9]);
+									reseting = rois[i].IsValid && !rois[i].ResetOrStop; // invalid record: stop (fail-closed), no auto reset
 
 								}
 							}
@@ -1221,7 +1283,7 @@ namespace RealVisionLab
 								ShowScene(new Bitmap(nokFrame));
 							if(reseting)
 							{
-								await Task.Delay(int.Parse(bekleme[8]));
+								await Task.Delay(bekleme.BeforeNokReset);
 								Reset();
 							}
 							else
@@ -1234,7 +1296,7 @@ namespace RealVisionLab
 					}
 				}
 
-				await Task.Delay(int.Parse(bekleme[4]));
+				await Task.Delay(bekleme.AfterScan);
 				lbl_islemTime.Text = "Tarama Bitti." + "( " + (DateTime.Now - startTime).TotalMilliseconds + " ms)";
 				startTime = DateTime.Now;
 
@@ -1277,13 +1339,13 @@ namespace RealVisionLab
 				{
 					lbl_alarm.Text = "ONAYLANDI";
 					lbl_alarm.ForeColor = grn;
-					await Task.Delay(int.Parse(bekleme[5]));
+					await Task.Delay(bekleme.BeforeStamp);
 					// T05: never drive Kaşe after an I/O drop during this cycle.
 					if(CycleAbortRequested()) return;
 
 					// Piston-Lamba-Kaşe => 1, 2, 3 ve 4 çıkış (UART and PLC)
 					WriteOutputs(io, new MachineOutputs(lamba: true, piston: true, kase: true, bos: true));
-					await Task.Delay(int.Parse(bekleme[6]));
+					await Task.Delay(bekleme.StampOn);
 					// Kaşe off. Pre-T04 asymmetry kept on purpose: UART clears the boş bit, PLC keeps plc_bos = true.
 					if((simIo != null || Settings.Default.UartEnable) && uartIo.IsConnected)
 					{
@@ -1296,7 +1358,7 @@ namespace RealVisionLab
 
 
 
-					await Task.Delay(int.Parse(bekleme[7]));
+					await Task.Delay(bekleme.AfterStamp);
 					Reset();
 				}
 
@@ -1999,7 +2061,8 @@ namespace RealVisionLab
 
 				int turuncuUst = 116000;
 
-				if(rectString[r_n].Split(',')[10].Split('*').Length > 1) turuncuUst = int.Parse(rectString[r_n].Split(',')[10].Split('*')[1]) * 1000;
+				string[] ustParts = rois[r_n].PartName.Split('*');
+				if(ustParts.Length > 1) turuncuUst = int.Parse(ustParts[1]) * 1000;
 
 				Ofset[r_n, 1] = turuncuUst - ((solKenarOrt - sagKenarOrt) * hassasiyet);
 				double ofsettt = (double)Ofset[r_n, 1] / 1000;
@@ -2336,7 +2399,7 @@ namespace RealVisionLab
 		{
 			try
 			{
-				string find_text = rectString[r_n].Split(',')[10];
+				string find_text = rois[r_n].PartName;
 				string[] findParts = find_text.Split('-');
 				if(findParts.Length < 2 || findParts[1] == "")
 				{
@@ -2439,7 +2502,7 @@ namespace RealVisionLab
 			ExternalQrWait wait = null;
 			try
 			{
-				string find_text = rectString[r_n].Split(',')[10];
+				string find_text = rois[r_n].PartName;
 				string[] findParts = find_text.Split('-');
 				if(findParts.Length < 2 || findParts[1] == "")
 				{
@@ -2448,7 +2511,7 @@ namespace RealVisionLab
 					UiLog($"ROI {r_n} Qr_Oku_harici: parça adı '{find_text}' içinde '-' sonrası aranan metin yok - {DateTime.Now:HH:mm:ss.fff}");
 					return;
 				}
-				int maxTicks = int.Parse(Settings.Default.Bekleme.Split('-')[9]) * 10;
+				int maxTicks = LoadWaits().ExternalWait * 10;
 
 				// Clear the input and arm the wait in one UI-thread step, so no keystroke falls in between.
 				wait = new ExternalQrWait(findParts[1]);

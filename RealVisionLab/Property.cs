@@ -1,4 +1,5 @@
 ﻿using AForge.Video.DirectShow;
+using RealVisionLab.Config;
 using RealVisionLab.Properties;
 using System;
 using System.Collections.Generic;
@@ -67,12 +68,15 @@ namespace RealVisionLab
             "HariciQrOku"
         };
         int index = 0;
+        // T09: typed settings (parsed once in Panel_ayarla, kept in sync by the Save* methods).
+        List<RoiConfig> roiCfg = new List<RoiConfig>();
+        List<PlcFunctionConfig> fonkCfg = new List<PlcFunctionConfig>();
         bool visib = false, adminMode = false;
         // rectangle setting = X,Y,Width,Height,MinOfset,MaxOfset,CamId,Taramaİşlem,Threshold,ResetorStop,ParçaAdı
 
         public Property(int tabindex)
         {
-            int[] beklee = Settings.Default.Bekleme.Split('-').Select(int.Parse).ToArray();
+            int[] beklee = ConfigParser.ParseWaitTimes(Settings.Default.Bekleme).ToArray();
             InitializeComponent();
             adminMode = Settings.Default.adminMode;
             if (debugMode) { adminMode = true; }
@@ -92,10 +96,7 @@ namespace RealVisionLab
             nud_Wait9.Value = beklee[8];
             nud_Wait10.Value = beklee[9];
             nud_Wait11.Value = beklee[10];
-            nud_Lamba.Value = Settings.Default.Lamba + 1;
-            nud_Kase.Value = Settings.Default.Kase + 1;
-            nud_Piston.Value = Settings.Default.Piston + 1;
-            nud_bosBit.Value = Settings.Default.bosBit + 1;
+            LoadUartBitControls();
             if (File.Exists("degerler.txt")) Dosya_goster("degerler.txt");
             //disable işlemi
             btn_addCam.Visible = adminMode;
@@ -104,11 +105,11 @@ namespace RealVisionLab
         }
         public void Panel_ayarla()
         {
-            int gbCount = Settings.Default.Cam.Split('/').Length;
-            int rectCount = Settings.Default.Rect.Split('/').Length;
-            int fonkCount = Settings.Default.PlcFonk.Split('/').Length;
-            string[] rectString = Settings.Default.Rect.Split('/');
-            string[] fonkString = Settings.Default.PlcFonk.Split('/');
+            int gbCount = ConfigParser.ParseCameras(Settings.Default.Cam).Count;
+            roiCfg = ConfigParser.ParseRois(Settings.Default.Rect, gbCount);
+            fonkCfg = ConfigParser.ParsePlcFunctions(Settings.Default.PlcFonk);
+            int rectCount = roiCfg.Count;
+            int fonkCount = fonkCfg.Count;
             int rectangleAdet = 0;
             int fonkAdet = 0;
 
@@ -261,7 +262,7 @@ namespace RealVisionLab
                 for (int j = 0; j < rectCount; j++)
                 {
                     p_rect[j] = new Panel();
-                    if (a == int.Parse(rectString[j].Split(',')[6]))
+                    if (a == roiCfg[j].CamId)
                     {
                         gb[a].Controls.Add(p_rect[j]);
                     }
@@ -270,7 +271,7 @@ namespace RealVisionLab
                     p_rect[j].Location = new Point(6, 20 + rectSay * 60);
                     p_rect[j].Size = new Size(532, 55);
 
-                    if (a == int.Parse(rectString[j].Split(',')[6]))
+                    if (a == roiCfg[j].CamId)
                     {
                         rectSay++;
                     }
@@ -307,7 +308,7 @@ namespace RealVisionLab
                     cmb_islem[j].Location = new Point(80 + 7 * 47, 26);
                     cmb_islem[j].Name = "cmb-" + j.ToString();
                     cmb_islem[j].Size = new Size(121, 21);
-                    cmb_islem[j].SelectedIndex = int.Parse(rectString[j].Split(',')[7]);
+                    cmb_islem[j].SelectedIndex = roiCfg[j].Operation;
                     cmb_islem[j].SelectedIndexChanged += Value_changed;
                     cmb_islem[j].BringToFront();
                     cmb_islem[j].Enabled = adminMode;
@@ -318,7 +319,7 @@ namespace RealVisionLab
                     txb_parca[j].Location = new Point(80 + 7 * 47, 3);
                     txb_parca[j].Name = "txb-" + j.ToString();
                     txb_parca[j].Size = new Size(100, 21);
-                    txb_parca[j].Text = rectString[j].Split(',')[10];
+                    txb_parca[j].Text = roiCfg[j].PartName;
                     txb_parca[j].TextChanged += Value_changed;
                     txb_parca[j].BringToFront();
 
@@ -343,7 +344,7 @@ namespace RealVisionLab
                     chk_hata[j].ForeColor = MainPage.wht;
                     chk_hata[j].TextAlign = ContentAlignment.MiddleLeft;
                     chk_hata[j].UseVisualStyleBackColor = true;
-                    chk_hata[j].Checked = bool.Parse(rectString[j].Split(',')[9]);
+                    chk_hata[j].Checked = roiCfg[j].ResetOrStop;
                     chk_hata[j].CheckedChanged += Value_changed;
                     p_rect[j].Controls.Add(chk_hata[j]);
                     chk_hata[j].BringToFront();
@@ -353,7 +354,7 @@ namespace RealVisionLab
                 for (int p = 0; p < fonkCount; p++)
                 {
                     p_fonk[p] = new Panel();
-                    if (a == int.Parse(fonkString[p].Split(',')[3]))
+                    if (a == fonkCfg[p].CamId)
                     {
                         plcGb[a].Controls.Add(p_fonk[p]);
                     }
@@ -362,7 +363,7 @@ namespace RealVisionLab
                     p_fonk[p].Location = new Point(6, 20 + fonkSay * 60);
                     p_fonk[p].Size = new Size(497, 55);
 
-                    if (a == int.Parse(fonkString[p].Split(',')[3]))
+                    if (a == fonkCfg[p].CamId)
                     {
                         fonkSay++;
                     }
@@ -398,7 +399,7 @@ namespace RealVisionLab
 
                 for (int e = 0; e < rectCount; e++)
                 {
-                    if (a == int.Parse(rectString[e].Split(',')[6]))
+                    if (a == roiCfg[e].CamId)
                     {
                         gb[a].Controls.Add(p_rect[e]);
                     }
@@ -421,8 +422,7 @@ namespace RealVisionLab
                         nud[e, i].Top = 26;
                         nud[e, i].Left = 80 + i * 47;
                         nud[e, i].Maximum = new decimal(new int[] { 500000, 0, 0, 0 });
-                        if (i == 6) nud[e, i].Value = int.Parse(rectString[e].Split(',')[8]);
-                        else nud[e, i].Value = int.Parse(rectString[e].Split(',')[i]);
+                        SetNud(nud[e, i], RoiNudValue(roiCfg[e], i));
                         nud[e, i].ValueChanged += Value_changed;
                         nud[e, i].Name = e.ToString() + "/" + i.ToString();
 
@@ -437,7 +437,7 @@ namespace RealVisionLab
 
                 for (int e = 0; e < fonkCount; e++)
                 {
-                    if (a == int.Parse(fonkString[e].Split(',')[3]))
+                    if (a == fonkCfg[e].CamId)
                     {
                         plcGb[a].Controls.Add(p_fonk[e]);
                     }
@@ -462,7 +462,8 @@ namespace RealVisionLab
                             nud_fonk[e, i].Size = new Size(45, 20);
                             nud_fonk[e, i].Top = 26;
                             nud_fonk[e, i].Left = 80 + i * 47;
-                            nud_fonk[e, i].Value = int.Parse(fonkString[e].Split(',')[i]);
+                            nud_fonk[e, i].Maximum = 65535; // default 100 would reject larger DB numbers / offsets
+                            SetNud(nud_fonk[e, i], i == 0 ? fonkCfg[e].Db : i == 1 ? fonkCfg[e].Start : fonkCfg[e].Size);
                             nud_fonk[e, i].ValueChanged += Function_Value_Changed;
                             nud_fonk[e, i].Name = e.ToString() + "*" + i.ToString();
                         }
@@ -481,7 +482,7 @@ namespace RealVisionLab
                     cmb_fonk[e].Top = 26;
                     cmb_fonk[e].Left = 80 + 3 * 47;
                     cmb_fonk[e].SelectedIndexChanged += Function_Value_Changed;
-                    cmb_fonk[e].SelectedIndex = cmb_fonk[e].Items.IndexOf(int.Parse(fonkString[e].Split(',')[4]));
+                    cmb_fonk[e].SelectedIndex = cmb_fonk[e].Items.IndexOf(fonkCfg[e].RoiNo);
                     cmb_fonk[e].BringToFront();
 
 
@@ -612,7 +613,7 @@ namespace RealVisionLab
                 cam = new VideoCaptureDevice[tab.Length];
                 int[] Cam_no = new int[tab.Length];
                 int[] Res_no = new int[tab.Length];
-                string[] camString = Settings.Default.Cam.Split('/');
+                List<CameraConfig> camString = ConfigParser.ParseCameras(Settings.Default.Cam);
                 for (int i = 0; i < tab.Length; i++)
                 {
                     int no = 1;
@@ -639,7 +640,7 @@ namespace RealVisionLab
                     {
                         cmbRes[i].Items.Add($"{capability.FrameSize.Width}x{capability.FrameSize.Height} - {capability.AverageFrameRate} FPS");
                     }
-                    Res_no[i] = int.Parse(camString[i].Split(',')[1]);
+                    Res_no[i] = camString[i].ResIndex;
                     if (Res_no[i] < 0)
                     {
                         Res_no[i] = 0;
@@ -658,7 +659,7 @@ namespace RealVisionLab
                 }
                 for (int i = 0; i < tab.Length; i++)
                 {
-                    Cam_no[i] = int.Parse(camString[i].Split(',')[0]);
+                    Cam_no[i] = camString[i].CamIndex;
                 }
 
                 for (int i = 0; i < tab.Length; i++)
@@ -700,7 +701,7 @@ namespace RealVisionLab
                 {
                     int[] Res_no = new int[tab.Length];
                     int i = int.Parse(cb.Name.Split('-')[1]);
-                    string[] camString = Settings.Default.Cam.Split('/');
+                    List<CameraConfig> camString = ConfigParser.ParseCameras(Settings.Default.Cam);
 
                     // Kontrol sayısını `devices.Count` ile sınırla
                     cmbRes[i].Items.Clear();
@@ -719,7 +720,7 @@ namespace RealVisionLab
                         cmbRes[i].Items.Add($"{capability.FrameSize.Width}x{capability.FrameSize.Height} - {capability.AverageFrameRate} FPS");
                     }
 
-                    Res_no[i] = int.Parse(camString[i].Split(',')[1]);
+                    Res_no[i] = camString[i].ResIndex;
                     if (Res_no[i] < 0)
                     {
                         Res_no[i] = 0;
@@ -1311,11 +1312,25 @@ namespace RealVisionLab
             nud_btn.Value = Settings.Default.buton;
             nud_rst_btn.Value = Settings.Default.reset_buton;
 
-            nud_Lamba.Value = Settings.Default.Lamba;
-            nud_Piston.Value = Settings.Default.Piston;
-            nud_Kase.Value = Settings.Default.Kase;
-            nud_bosBit.Value = Settings.Default.bosBit;
+            LoadUartBitControls();
 
+        }
+
+        // UART output bit numbering: the UI shows 1-based (1..8), Settings (Lamba/Piston/Kase/bosBit) store 0-based (0..7).
+        private static decimal UartBitToUi(int stored)
+        {
+            return Math.Min(8, Math.Max(1, stored + 1));
+        }
+        private static int UartBitToStored(decimal ui)
+        {
+            return (int)Math.Min(8, Math.Max(1, ui)) - 1;
+        }
+        private void LoadUartBitControls()
+        {
+            nud_Lamba.Value = UartBitToUi(Settings.Default.Lamba);
+            nud_Piston.Value = UartBitToUi(Settings.Default.Piston);
+            nud_Kase.Value = UartBitToUi(Settings.Default.Kase);
+            nud_bosBit.Value = UartBitToUi(Settings.Default.bosBit);
         }
         private void SizeChange_Click(object sender, EventArgs e)
         {
@@ -1416,10 +1431,10 @@ namespace RealVisionLab
             Settings.Default.plc_kase = (int)nud_plc_kase.Value;
             Settings.Default.plc_bos = (int)nud_plc_ok_bit.Value;
 
-            Settings.Default.Lamba = (int)nud_Lamba.Value;
-            Settings.Default.Piston = (int)nud_Piston.Value;
-            Settings.Default.Kase = (int)nud_Kase.Value;
-            Settings.Default.bosBit = (int)nud_bosBit.Value;
+            Settings.Default.Lamba = UartBitToStored(nud_Lamba.Value);
+            Settings.Default.Piston = UartBitToStored(nud_Piston.Value);
+            Settings.Default.Kase = UartBitToStored(nud_Kase.Value);
+            Settings.Default.bosBit = UartBitToStored(nud_bosBit.Value);
 
             Settings.Default.buton = (int)nud_btn.Value;
             Settings.Default.reset_buton = (int)nud_rst_btn.Value;
@@ -1683,14 +1698,15 @@ namespace RealVisionLab
 
         private void btn_bit_Click(object sender, EventArgs e)
         {
+            // Each NUD is corrected independently (UI 1..8, defaults 1/2/3/4), then stored 0-based.
             if (nud_Lamba.Value < 1 || nud_Lamba.Value > 8) nud_Lamba.Value = 1;
-            if (nud_Piston.Value < 1 || nud_Piston.Value > 8) nud_Lamba.Value = 2;
-            if (nud_Kase.Value < 1 || nud_Kase.Value > 8) nud_Lamba.Value = 3;
-            if (nud_bosBit.Value < 1 || nud_bosBit.Value > 8) nud_Lamba.Value = 4;
-            Settings.Default.Lamba = (int)nud_Lamba.Value - 1;
-            Settings.Default.Piston = (int)nud_Piston.Value - 1;
-            Settings.Default.Kase = (int)nud_Kase.Value - 1;
-            Settings.Default.bosBit = (int)nud_bosBit.Value - 1;
+            if (nud_Piston.Value < 1 || nud_Piston.Value > 8) nud_Piston.Value = 2;
+            if (nud_Kase.Value < 1 || nud_Kase.Value > 8) nud_Kase.Value = 3;
+            if (nud_bosBit.Value < 1 || nud_bosBit.Value > 8) nud_bosBit.Value = 4;
+            Settings.Default.Lamba = UartBitToStored(nud_Lamba.Value);
+            Settings.Default.Piston = UartBitToStored(nud_Piston.Value);
+            Settings.Default.Kase = UartBitToStored(nud_Kase.Value);
+            Settings.Default.bosBit = UartBitToStored(nud_bosBit.Value);
             Settings.Default.Save();
         }
         private void btn_txtDosyaAc_Click(object sender, EventArgs e)
