@@ -888,6 +888,10 @@ namespace RealVisionLab
 					caming_id = c;
 					int rectbno = 1;
 
+					// Bounded frame wait (fail-closed): never block the cycle forever when no frame arrives.
+					// Deadline = max(Bekleme[1] * 5, 5000) ms. On timeout every ROI of this camera is marked NOK below.
+					int frameWaitMs = Math.Max(int.Parse(bekleme[1]) * 5, 5000);
+					Stopwatch frameWatch = Stopwatch.StartNew();
 					do
 					{
 						capture = true;
@@ -898,9 +902,19 @@ namespace RealVisionLab
 						}
 						catch(Exception) { }
 					}
-					while
-					(bitmap[c] == null);
-					await Task.Delay(int.Parse(bekleme[2]));
+					while(bitmap[c] == null && frameWatch.ElapsedMilliseconds < frameWaitMs);
+
+					bool frameMissing = bitmap[c] == null;
+					if(frameMissing)
+					{
+						lbl_alarm.Text = $"Kamera {c + 1} görüntü yok";
+						lbl_alarm.ForeColor = red;
+						tx_debug.Text = $"Kamera {c + 1} görüntü yok ({frameWaitMs} ms içinde kare alınamadı) - {DateTime.Now:HH:mm:ss.fff}";
+					}
+					else
+					{
+						await Task.Delay(int.Parse(bekleme[2]));
+					}
 
 					lbl_islemTime.Text = "Tarama Başladı." + "( " + (DateTime.Now - startTime).TotalMilliseconds + " ms)";
 					startTime = DateTime.Now;
@@ -910,6 +924,14 @@ namespace RealVisionLab
 						startTime = DateTime.Now;
 						if(caming_id == int.Parse(rectString[i].Split(',')[6]))
 						{
+							// Fail-closed: every evaluated ROI starts as NOK. Each tarama function clears it
+							// (hata = false) only on a successful, in-range result; any exception, missing
+							// frame or out-of-frame ROI therefore leaves the ROI NOK.
+							// Exceptions: 9 (Cizgi_Ile_Lokasyon_Bul, locator) and 11 (Audi_alttan_uzat, helper)
+							// do not measure against Min/Max; they clear hata only when they complete without error.
+							// 19 (Btn_bekle, wait step) likewise clears hata on normal completion (pre-existing
+							// semantics: a timeout without button press was never a NOK).
+							hata[c, i] = true;
 							if(rectString[i].Split(',')[10].Contains("yön"))
 							{
 								yon_no[0] = c;
@@ -928,6 +950,29 @@ namespace RealVisionLab
 							int islem_id = int.Parse(rectString[i].Split(',')[7]);
 							bmp[i]?.Dispose();
 							pbox[i].Image = null;
+							bmp[i] = null;
+
+							// ROI bounds check: Bitmap.Clone throws GDI+ OutOfMemoryException for a rectangle
+							// that is not fully inside the frame. Such an ROI (or a missing frame) stays NOK
+							// and its tarama function is skipped.
+							bool roiInFrame = false;
+							if(!frameMissing)
+							{
+								Rectangle frameBounds = new Rectangle(0, 0, bitmap[c].Width, bitmap[c].Height);
+								Rectangle roiClip = Rectangle.Intersect(Rect[i], frameBounds);
+								if(roiClip.IsEmpty || roiClip != Rect[i])
+								{
+									hata[c, i] = true;
+									tx_debug.Text = $"ROI {i} out of frame (Rect={Rect[i]}, frame={frameBounds.Width}x{frameBounds.Height}) - {DateTime.Now:HH:mm:ss.fff}";
+								}
+								else
+								{
+									roiInFrame = true;
+								}
+							}
+
+							if(roiInFrame)
+							{
 							bmp[i] = new Bitmap(bitmap[c].Clone(Rect[i], PixelFormat.Format24bppRgb));
 							await Task.Run(async () =>
 							{
@@ -1058,6 +1103,7 @@ namespace RealVisionLab
 										Qr_Oku_harici(bmp[i], i, c);
 								}
 							});
+							} // if(roiInFrame) - dispatch body intentionally not re-indented (T11 refactors the dispatch)
 							pbox[i].Image = bmp[i];
 							pbox[i].BringToFront();
 							pbox[i].Visible = debugMode;
@@ -1088,18 +1134,25 @@ namespace RealVisionLab
 							break;
 						}
 					}
+					if(frameMissing)
+					{
+						// No frame => never ONAYLANDI, even if this camera has no ROI assigned.
+						hataliKamera = c;
+						isTrue = true;
+					}
 
 					if(isTrue)
 					{
 						lbl_alarm.Text = "";
-						using(Graphics g = Graphics.FromImage(bitmap[hataliKamera]))
+						Bitmap nokFrame = bitmap[hataliKamera];
+						using(Graphics g = nokFrame != null ? Graphics.FromImage(nokFrame) : null)
 						{
 							Pen pen = new Pen(red);
 							for(int i = 0; i < rectString.Length; i++)
 							{
 								if(hata[hataliKamera, i])
 								{
-									g.DrawImage(Resources.carpi, (Rect[i].X + (Rect[i].Width - 75) / 2), (Rect[i].Y + (Rect[i].Height - 75) / 2), 75, 75);
+									g?.DrawImage(Resources.carpi, (Rect[i].X + (Rect[i].Width - 75) / 2), (Rect[i].Y + (Rect[i].Height - 75) / 2), 75, 75);
 									lbl_alarm.Text += rectString[i].Split(',')[10] + " - ";
 									lbl_alarm.ForeColor = red;
 									reseting = !bool.Parse(rectString[i].Split(',')[9]);
@@ -1107,7 +1160,13 @@ namespace RealVisionLab
 								}
 							}
 							lbl_alarm.Text += "Hatası";
-							pb_scene.Image = bitmap[hataliKamera];
+							if(frameMissing)
+							{
+								lbl_alarm.Text = $"Kamera {c + 1} görüntü yok";
+								lbl_alarm.ForeColor = red;
+							}
+							if(nokFrame != null)
+								pb_scene.Image = nokFrame;
 							if(reseting)
 							{
 								await Task.Delay(int.Parse(bekleme[8]));
@@ -1292,6 +1351,7 @@ namespace RealVisionLab
 			}
 			catch(Exception ex)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = ex.ToString() + "\r\n";
 			}
 		}
@@ -1337,6 +1397,7 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = exception.ToString();
 			}
 		}
@@ -1378,6 +1439,7 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = exception.ToString();
 			}
 		}
@@ -1419,6 +1481,7 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = exception.ToString();
 			}
 		}
@@ -1466,6 +1529,7 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = exception.ToString();
 			}
 		}
@@ -1513,6 +1577,7 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = exception.ToString();
 			}
 		}
@@ -1581,6 +1646,7 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = exception.ToString();
 			}
 		}
@@ -1648,6 +1714,7 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = exception.ToString();
 			}
 		}
@@ -1705,6 +1772,7 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = exception.ToString();
 			}
 		}
@@ -1769,10 +1837,12 @@ namespace RealVisionLab
 
 
 				bmp[r_n] = bitmap;
-
+				// Locator: no Min/Max measurement; OK only when the shift completed without error.
+				hata[c_n, r_n] = false;
 			}
 			catch(Exception exception)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = exception.ToString();
 			}
 		}
@@ -1925,6 +1995,7 @@ namespace RealVisionLab
 			}
 			catch(Exception exception)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = exception.ToString();
 			}
 		}
@@ -1961,346 +2032,450 @@ namespace RealVisionLab
 				Ofset[r_n, 1] = sagalt;
 				Ofset[r_n, 2] = x1;
 				bmp[r_n] = bitmap;
+				// Helper: Ofset holds line geometry, not a Min/Max result; OK only on successful completion.
+				hata[c_n, r_n] = false;
 			}
 			catch(Exception exception)
 			{
+				hata[c_n, r_n] = true;
 				tx_debug.Text = exception.ToString();
 			}
 		}
 		//12-
 		private void Iki_Siyah_Arasi_Mesafe_Dik(Bitmap bitmap, int r_n, int c_n)
 		{
-			if(bitmap == null)
+			try
+			{
+				if(bitmap == null)
+				{
+					hata[c_n, r_n] = true;
+					return;
+				}
+
+				int mesafe = 10000;
+				int mesafe2 = 0;
+				for(int x = 0; x < bitmap.Width; x++)
+				{
+					mesafe2 = 0;
+					for(int y = bitmap.Height - 1; y > 0; y--)
+					{
+						Color c = bitmap.GetPixel(x, y);
+
+						if((c.R + c.G + c.B) / 3 < Thrs[r_n]) c = grn;
+						else c = org;
+
+						if(c == org) { mesafe2++; c = red; }
+
+						bitmap.SetPixel(x, y, c);
+					}
+					if(mesafe2 < mesafe) mesafe = mesafe2;
+				}
+				double pxFark = 75;
+				double mmFark = 17;
+				int okumaOfset = 32;
+				double carpan = pxFark / mmFark;
+				double realmm = 198;
+				double realpxl = realmm * carpan;
+				mesafe = mesafe - okumaOfset;
+				mesafe = (int)(mesafe / carpan);
+				mesafe = (int)realmm - mesafe;
+				Ofset[r_n, 1] = mesafe;
+				if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
+				else hata[c_n, r_n] = true;
+				bmp[r_n] = bitmap;
+			}
+			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				return;
+				tx_debug.Text = exception.ToString();
 			}
-
-			int mesafe = 10000;
-			int mesafe2 = 0;
-			for(int x = 0; x < bitmap.Width; x++)
-			{
-				mesafe2 = 0;
-				for(int y = bitmap.Height - 1; y > 0; y--)
-				{
-					Color c = bitmap.GetPixel(x, y);
-
-					if((c.R + c.G + c.B) / 3 < Thrs[r_n]) c = grn;
-					else c = org;
-
-					if(c == org) { mesafe2++; c = red; }
-
-					bitmap.SetPixel(x, y, c);
-				}
-				if(mesafe2 < mesafe) mesafe = mesafe2;
-			}
-			double pxFark = 75;
-			double mmFark = 17;
-			int okumaOfset = 32;
-			double carpan = pxFark / mmFark;
-			double realmm = 198;
-			double realpxl = realmm * carpan;
-			mesafe = mesafe - okumaOfset;
-			mesafe = (int)(mesafe / carpan);
-			mesafe = (int)realmm - mesafe;
-			Ofset[r_n, 1] = mesafe;
-			if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
-			else hata[c_n, r_n] = true;
-			bmp[r_n] = bitmap;
 		}
 		//13-
 		private void L_Iki_Siyah_Arasi_Mesafe_Yatay(Bitmap bitmap, int r_n, int c_n)
 		{
-			if(bitmap == null)
+			try
+			{
+				if(bitmap == null)
+				{
+					hata[c_n, r_n] = true;
+					return;
+				}
+
+				int mesafe = 0;
+				bool kenar = false;
+				int sagAlt = 0;
+				for(int y = 0; y < bitmap.Height; y++)
+				{
+					Color a = bitmap.GetPixel(bitmap.Width - 1, y);
+
+					if((a.R + a.G + a.B) / 3 < Thrs[r_n] && !kenar) { sagAlt = y; kenar = true; a = red; }
+					else a = grn;
+					bitmap.SetPixel(bitmap.Width - 1, y, a);
+				}
+				for(int x = bitmap.Width - 1; x > 0; x--)
+				{
+					Color c = bitmap.GetPixel(x, sagAlt + 5);
+
+					if((c.R + c.G + c.B) / 3 < Thrs[r_n]) c = red;
+					else { mesafe++; c = grn; }
+
+					bitmap.SetPixel(x, sagAlt + 5, c);
+				}
+
+				//double pxFark = 43;
+				//double mmFark = 17;
+				//int okumaOfset = 19;
+				//double carpan = pxFark / mmFark;
+				//double realmm = 198;
+				//double realpxl = realmm * carpan;
+				//mesafe = mesafe - okumaOfset;
+				//mesafe = (int)(mesafe / carpan);
+				//mesafe = (int)realmm - mesafe;
+
+				Ofset[r_n, 1] = mesafe;
+				if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
+				else hata[c_n, r_n] = true;
+				bmp[r_n] = bitmap;
+			}
+			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				return;
+				tx_debug.Text = exception.ToString();
 			}
-
-			int mesafe = 0;
-			bool kenar = false;
-			int sagAlt = 0;
-			for(int y = 0; y < bitmap.Height; y++)
-			{
-				Color a = bitmap.GetPixel(bitmap.Width - 1, y);
-
-				if((a.R + a.G + a.B) / 3 < Thrs[r_n] && !kenar) { sagAlt = y; kenar = true; a = red; }
-				else a = grn;
-				bitmap.SetPixel(bitmap.Width - 1, y, a);
-			}
-			for(int x = bitmap.Width - 1; x > 0; x--)
-			{
-				Color c = bitmap.GetPixel(x, sagAlt + 5);
-
-				if((c.R + c.G + c.B) / 3 < Thrs[r_n]) c = red;
-				else { mesafe++; c = grn; }
-
-				bitmap.SetPixel(x, sagAlt + 5, c);
-			}
-
-			//double pxFark = 43;
-			//double mmFark = 17;
-			//int okumaOfset = 19;
-			//double carpan = pxFark / mmFark;
-			//double realmm = 198;
-			//double realpxl = realmm * carpan;
-			//mesafe = mesafe - okumaOfset;
-			//mesafe = (int)(mesafe / carpan);
-			//mesafe = (int)realmm - mesafe;
-
-			Ofset[r_n, 1] = mesafe;
-			if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
-			else hata[c_n, r_n] = true;
-			bmp[r_n] = bitmap;
 		}
 		//14-
 		private void R_Iki_Siyah_Arasi_Mesafe_Yatay(Bitmap bitmap, int r_n, int c_n)
 		{
-			if(bitmap == null)
+			try
+			{
+				if(bitmap == null)
+				{
+					hata[c_n, r_n] = true;
+					return;
+				}
+
+				int mesafe = 0;
+				bool kenar = false;
+				int solAlt = 0;
+				for(int y = 0; y < bitmap.Height; y++)
+				{
+					Color a = bitmap.GetPixel(0, y);
+
+					if((a.R + a.G + a.B) / 3 < Thrs[r_n] && !kenar) { solAlt = y; kenar = true; a = red; }
+					else a = grn;
+					bitmap.SetPixel(bitmap.Width - 1, y, a);
+				}
+				for(int x = 0; x < bitmap.Width; x++)
+				{
+					Color c = bitmap.GetPixel(x, solAlt + 5);
+
+					if((c.R + c.G + c.B) / 3 < Thrs[r_n]) c = red;
+					else { mesafe++; c = grn; }
+
+					bitmap.SetPixel(x, solAlt + 5, c);
+				}
+
+				//double pxFark = 43;
+				//double mmFark = 17;
+				//int okumaOfset = 19;
+				//double carpan = pxFark / mmFark;
+				//double realmm = 198;
+				//double realpxl = realmm * carpan;
+				//mesafe = mesafe - okumaOfset;
+				//mesafe = (int)(mesafe / carpan);
+				//mesafe = (int)realmm - mesafe;
+
+				Ofset[r_n, 1] = mesafe;
+				if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
+				else hata[c_n, r_n] = true;
+				bmp[r_n] = bitmap;
+			}
+			catch(Exception exception)
 			{
 				hata[c_n, r_n] = true;
-				return;
+				tx_debug.Text = exception.ToString();
 			}
-
-			int mesafe = 0;
-			bool kenar = false;
-			int solAlt = 0;
-			for(int y = 0; y < bitmap.Height; y++)
-			{
-				Color a = bitmap.GetPixel(0, y);
-
-				if((a.R + a.G + a.B) / 3 < Thrs[r_n] && !kenar) { solAlt = y; kenar = true; a = red; }
-				else a = grn;
-				bitmap.SetPixel(bitmap.Width - 1, y, a);
-			}
-			for(int x = 0; x < bitmap.Width; x++)
-			{
-				Color c = bitmap.GetPixel(x, solAlt + 5);
-
-				if((c.R + c.G + c.B) / 3 < Thrs[r_n]) c = red;
-				else { mesafe++; c = grn; }
-
-				bitmap.SetPixel(x, solAlt + 5, c);
-			}
-
-			//double pxFark = 43;
-			//double mmFark = 17;
-			//int okumaOfset = 19;
-			//double carpan = pxFark / mmFark;
-			//double realmm = 198;
-			//double realpxl = realmm * carpan;
-			//mesafe = mesafe - okumaOfset;
-			//mesafe = (int)(mesafe / carpan);
-			//mesafe = (int)realmm - mesafe;
-
-			Ofset[r_n, 1] = mesafe;
-			if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
-			else hata[c_n, r_n] = true;
-			bmp[r_n] = bitmap;
 		}
 		//15-
 		private void L_Dikey_Aci_Olcme(Bitmap bitmap, int r_n, int c_n)
 		{
-			bool a = false;
-			bool b = false;
-			int ust = 0, alt = 0;
-			int y1 = bitmap.Height / 4;
-			int y2 = (bitmap.Height / 4) * 3;
-			for(int x = bitmap.Width - 1; x > 0; x--)
+			try
 			{
-				Color c1 = bitmap.GetPixel(x, y1);
-				Color c2 = bitmap.GetPixel(x, y2);
+				bool a = false;
+				bool b = false;
+				int ust = 0, alt = 0;
+				int y1 = bitmap.Height / 4;
+				int y2 = (bitmap.Height / 4) * 3;
+				for(int x = bitmap.Width - 1; x > 0; x--)
+				{
+					Color c1 = bitmap.GetPixel(x, y1);
+					Color c2 = bitmap.GetPixel(x, y2);
 
-				if((c1.R + c1.G + c1.B) / 3 < Thrs[r_n] && !a) { ust = x; a = true; c1 = red; }
-				else c1 = grn;
+					if((c1.R + c1.G + c1.B) / 3 < Thrs[r_n] && !a) { ust = x; a = true; c1 = red; }
+					else c1 = grn;
 
-				if((c2.R + c2.G + c2.B) / 3 < Thrs[r_n] && !b) { alt = x; b = true; c2 = red; }
-				else c2 = grn;
+					if((c2.R + c2.G + c2.B) / 3 < Thrs[r_n] && !b) { alt = x; b = true; c2 = red; }
+					else c2 = grn;
 
-				bitmap.SetPixel(x, y1, c1);
-				bitmap.SetPixel(x, y2, c2);
+					bitmap.SetPixel(x, y1, c1);
+					bitmap.SetPixel(x, y2, c2);
+				}
+
+				double kenar1 = alt - ust;
+				double kenar2 = y1 * 2;
+				double hip = Math.Sqrt((kenar2 * kenar2) + (kenar1 * kenar1));
+				double angle = Math.Asin(kenar2 / hip) * 180 / Math.PI;
+
+				Ofset[r_n, 1] = (int)angle;
+				if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
+				else hata[c_n, r_n] = true;
+				bmp[r_n] = bitmap;
 			}
-
-			double kenar1 = alt - ust;
-			double kenar2 = y1 * 2;
-			double hip = Math.Sqrt((kenar2 * kenar2) + (kenar1 * kenar1));
-			double angle = Math.Asin(kenar2 / hip) * 180 / Math.PI;
-
-			Ofset[r_n, 1] = (int)angle;
-			if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
-			else hata[c_n, r_n] = true;
-			bmp[r_n] = bitmap;
+			catch(Exception exception)
+			{
+				hata[c_n, r_n] = true;
+				tx_debug.Text = exception.ToString();
+			}
 		}
 		//16-
 		private void R_Dikey_Aci_Olcme(Bitmap bitmap, int r_n, int c_n)
 		{
-			bool a = false;
-			bool b = false;
-			int ust = 0, alt = 0;
-			int y1 = bitmap.Height / 4;
-			int y2 = (bitmap.Height / 4) * 3;
-			for(int x = 0; x < bitmap.Width; x++)
+			try
 			{
-				Color c1 = bitmap.GetPixel(x, y1);
-				Color c2 = bitmap.GetPixel(x, y2);
+				bool a = false;
+				bool b = false;
+				int ust = 0, alt = 0;
+				int y1 = bitmap.Height / 4;
+				int y2 = (bitmap.Height / 4) * 3;
+				for(int x = 0; x < bitmap.Width; x++)
+				{
+					Color c1 = bitmap.GetPixel(x, y1);
+					Color c2 = bitmap.GetPixel(x, y2);
 
-				if((c1.R + c1.G + c1.B) / 3 < Thrs[r_n] && !a) { ust = x; a = true; c1 = red; }
-				else c1 = grn;
+					if((c1.R + c1.G + c1.B) / 3 < Thrs[r_n] && !a) { ust = x; a = true; c1 = red; }
+					else c1 = grn;
 
-				if((c2.R + c2.G + c2.B) / 3 < Thrs[r_n] && !b) { alt = x; b = true; c2 = red; }
-				else c2 = grn;
+					if((c2.R + c2.G + c2.B) / 3 < Thrs[r_n] && !b) { alt = x; b = true; c2 = red; }
+					else c2 = grn;
 
-				bitmap.SetPixel(x, y1, c1);
-				bitmap.SetPixel(x, y2, c2);
+					bitmap.SetPixel(x, y1, c1);
+					bitmap.SetPixel(x, y2, c2);
+				}
+
+				double kenar1 = alt - ust;
+				double kenar2 = y1 * 2;
+				double hip = Math.Sqrt((kenar2 * kenar2) + (kenar1 * kenar1));
+				double angle = Math.Asin(kenar2 / hip) * 180 / Math.PI;
+
+				Ofset[r_n, 1] = (int)angle;
+				if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
+				else hata[c_n, r_n] = true;
+				bmp[r_n] = bitmap;
 			}
-
-			double kenar1 = alt - ust;
-			double kenar2 = y1 * 2;
-			double hip = Math.Sqrt((kenar2 * kenar2) + (kenar1 * kenar1));
-			double angle = Math.Asin(kenar2 / hip) * 180 / Math.PI;
-
-			Ofset[r_n, 1] = (int)angle;
-			if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
-			else hata[c_n, r_n] = true;
-			bmp[r_n] = bitmap;
+			catch(Exception exception)
+			{
+				hata[c_n, r_n] = true;
+				tx_debug.Text = exception.ToString();
+			}
 		}
 		//17-
 		private void Iki_method_arasi_fark(Bitmap bitmap, int r_n, int c_n)
 		{
-			int g1 = bitmap.Width - 1;
-			int g2 = bitmap.Height - 1;
-			int m1 = Ofset[g1, 1];
-			int m2 = Ofset[g2, 1];
-			int fark = Math.Abs(m1 - m2);
+			try
+			{
+				int g1 = bitmap.Width - 1;
+				int g2 = bitmap.Height - 1;
+				// Reference ROI indices come from this ROI's width/height; reject anything outside Ofset.
+				if(g1 < 0 || g2 < 0 || g1 >= Ofset.GetLength(0) || g2 >= Ofset.GetLength(0))
+				{
+					hata[c_n, r_n] = true;
+					tx_debug.Text = $"ROI {r_n} Iki_method_arasi_fark: referans ROI indeksi geçersiz (g1={g1}, g2={g2}, ROI sayısı={Ofset.GetLength(0)}) - {DateTime.Now:HH:mm:ss.fff}";
+					return;
+				}
+				int m1 = Ofset[g1, 1];
+				int m2 = Ofset[g2, 1];
+				int fark = Math.Abs(m1 - m2);
 
-			Ofset[r_n, 1] = (int)fark;
-			if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
-			else hata[c_n, r_n] = true;
-			bmp[r_n] = bitmap;
+				Ofset[r_n, 1] = (int)fark;
+				if(Ofset[r_n, 0] <= Ofset[r_n, 1] && Ofset[r_n, 1] <= Ofset[r_n, 2]) hata[c_n, r_n] = false;
+				else hata[c_n, r_n] = true;
+				bmp[r_n] = bitmap;
+			}
+			catch(Exception exception)
+			{
+				hata[c_n, r_n] = true;
+				tx_debug.Text = exception.ToString();
+			}
 		}
 		//18-
 		private void Qr_Okuyucu(Bitmap bitmap, int r_n, int c_n)
 		{
-			Bitmap bwBitmap = new Bitmap(bitmap.Width, bitmap.Height);
-
-			for(int x = 0; x < bitmap.Width; x++)
+			try
 			{
-				for(int y = 0; y < bitmap.Height; y++)
+				string find_text = rectString[r_n].Split(',')[10];
+				string[] findParts = find_text.Split('-');
+				if(findParts.Length < 2 || findParts[1] == "")
 				{
-					Color sourceColor = bitmap.GetPixel(x, y);
-					int threshold = Thrs[r_n];
-					Color newColor = (sourceColor.R + sourceColor.G + sourceColor.B) / 3 >= threshold ? Color.White : Color.Black;
-					bwBitmap.SetPixel(x, y, newColor);
+					// Part name must be "<isim>-<aranan metin>"; without it nothing can be verified => NOK.
+					hata[c_n, r_n] = true;
+					txt_qr.Text = "QR: parça adında '-' yok";
+					tx_debug.Text = $"ROI {r_n} Qr_Okuyucu: parça adı '{find_text}' içinde '-' sonrası aranan metin yok - {DateTime.Now:HH:mm:ss.fff}";
+					return;
 				}
-			}
 
-			IBarcodeReader reader = new BarcodeReader();
-			var result = reader.Decode(bwBitmap);
-			string find_text = rectString[r_n].Split(',')[10];
-			if(result != null)
-			{
-				hata[c_n, r_n] = result.Text.Contains(find_text.Split('-')[1]) ? false : true;
-				txt_qr.Text = "QR: " + result.Text + " " + find_text.Split('-')[1];
+				Bitmap bwBitmap = new Bitmap(bitmap.Width, bitmap.Height);
+
+				for(int x = 0; x < bitmap.Width; x++)
+				{
+					for(int y = 0; y < bitmap.Height; y++)
+					{
+						Color sourceColor = bitmap.GetPixel(x, y);
+						int threshold = Thrs[r_n];
+						Color newColor = (sourceColor.R + sourceColor.G + sourceColor.B) / 3 >= threshold ? Color.White : Color.Black;
+						bwBitmap.SetPixel(x, y, newColor);
+					}
+				}
+
+				IBarcodeReader reader = new BarcodeReader();
+				var result = reader.Decode(bwBitmap);
+				if(result != null)
+				{
+					hata[c_n, r_n] = result.Text.Contains(findParts[1]) ? false : true;
+					txt_qr.Text = "QR: " + result.Text + " " + findParts[1];
+				}
+				else
+				{
+					txt_qr.Text = "QR: okunamadı " + findParts[1];
+					hata[c_n, r_n] = true;
+				}
+
+				bmp[r_n] = bwBitmap;
 			}
-			else
+			catch(Exception exception)
 			{
-				txt_qr.Text = "QR: okunamadı " + find_text.Split('-')[1];
 				hata[c_n, r_n] = true;
+				tx_debug.Text = exception.ToString();
 			}
-
-			bmp[r_n] = bwBitmap;
 		}
 		//19-
 		private void Btn_bekle(Bitmap bitmap, int r_n, int c_n)
 		{
-			buton = false;
-			lbl_alarm.Text = "BEKLENİYOR";
-			lbl_alarm.ForeColor = org;
-			if(client.Connected)
+			try
 			{
-				byte[] controlPLC = new byte[1];
-				S7.SetBitAt(controlPLC, 0, Settings.Default.plc_lamba, true); //Lamba
-				S7.SetBitAt(controlPLC, 0, Settings.Default.plc_piston, true); //Piston
-				S7.SetBitAt(controlPLC, 0, Settings.Default.plc_bos, true); //Lazer
-				result = client.DBWrite(1, 0, 1, controlPLC);
-
-				if(result != 0)
-					port_text.Text = client.ErrorText(result);
-			}
-			bool basildi = false;
-			for(int i = 0; i < Thrs[r_n] * 10; i++)
-			{
-				bitmap = null;
-
-
-				capture = true;
-				try
-				{
-					bitmap = new Bitmap(pb_scene.Image);
-				}
-				catch(Exception) { }
-
-				if(buton) i = Thrs[r_n] * 10;
-				Thread.Sleep(100);
-
+				buton = false;
+				lbl_alarm.Text = "BEKLENİYOR";
+				lbl_alarm.ForeColor = org;
 				if(client.Connected)
 				{
 					byte[] controlPLC = new byte[1];
-					result = client.DBRead(1, 0, 1, controlPLC); basildi = S7.GetBitAt(controlPLC, 0, 0);
+					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_lamba, true); //Lamba
+					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_piston, true); //Piston
+					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_bos, true); //Lazer
+					result = client.DBWrite(1, 0, 1, controlPLC);
+
+					if(result != 0)
+						port_text.Text = client.ErrorText(result);
 				}
-				if(basildi)
+				bool basildi = false;
+				for(int i = 0; i < Thrs[r_n] * 10; i++)
 				{
+					bitmap = null;
+
+
+					capture = true;
+					try
+					{
+						bitmap = new Bitmap(pb_scene.Image);
+					}
+					catch(Exception) { }
+
+					if(buton) i = Thrs[r_n] * 10;
+					Thread.Sleep(100);
+
 					if(client.Connected)
 					{
 						byte[] controlPLC = new byte[1];
-						S7.SetBitAt(controlPLC, 0, Settings.Default.plc_lamba, true); //Lamba
-						S7.SetBitAt(controlPLC, 0, Settings.Default.plc_piston, true); //Piston
-						S7.SetBitAt(controlPLC, 0, Settings.Default.plc_bos, false); //Lazer
-						result = client.DBWrite(1, 0, 1, controlPLC);
-
-						if(result != 0)
-							port_text.Text = client.ErrorText(result);
+						result = client.DBRead(1, 0, 1, controlPLC); basildi = S7.GetBitAt(controlPLC, 0, Settings.Default.plc_buton);
 					}
-					buton = true;
+					if(basildi)
+					{
+						if(client.Connected)
+						{
+							byte[] controlPLC = new byte[1];
+							S7.SetBitAt(controlPLC, 0, Settings.Default.plc_lamba, true); //Lamba
+							S7.SetBitAt(controlPLC, 0, Settings.Default.plc_piston, true); //Piston
+							S7.SetBitAt(controlPLC, 0, Settings.Default.plc_bos, false); //Lazer
+							result = client.DBWrite(1, 0, 1, controlPLC);
+
+							if(result != 0)
+								port_text.Text = client.ErrorText(result);
+						}
+						buton = true;
+					}
 				}
+				// Wait step, not a measurement: OK on normal completion (pressed or timed out), as before T03.
+				hata[c_n, r_n] = false;
+			}
+			catch(Exception exception)
+			{
+				hata[c_n, r_n] = true;
+				tx_debug.Text = exception.ToString();
 			}
 		}
 		//20-
 		private void Qr_Oku_harici(Bitmap bitmap, int r_n, int c_n)
 		{
-			txt_qr.Text = "";
-			lbl_alarm.Text = "BEKLENİYOR...";
-			lbl_alarm.ForeColor = org;
-			if(client.Connected)
+			try
 			{
-				byte[] controlPLC = new byte[1];
-				S7.SetBitAt(controlPLC, 0, Settings.Default.plc_lamba, true); //Lamba
-				S7.SetBitAt(controlPLC, 0, Settings.Default.plc_piston, true); //Piston
-				S7.SetBitAt(controlPLC, 0, Settings.Default.plc_bos, true); //Lazer
-				result = client.DBWrite(1, 0, 1, controlPLC);
+				string find_text = rectString[r_n].Split(',')[10];
+				string[] findParts = find_text.Split('-');
+				if(findParts.Length < 2 || findParts[1] == "")
+				{
+					// Part name must be "<isim>-<aranan metin>"; checked before any output is driven => NOK.
+					hata[c_n, r_n] = true;
+					tx_debug.Text = $"ROI {r_n} Qr_Oku_harici: parça adı '{find_text}' içinde '-' sonrası aranan metin yok - {DateTime.Now:HH:mm:ss.fff}";
+					return;
+				}
 
-				if(result != 0)
-					port_text.Text = client.ErrorText(result);
+				txt_qr.Text = "";
+				lbl_alarm.Text = "BEKLENİYOR...";
+				lbl_alarm.ForeColor = org;
+				if(client.Connected)
+				{
+					byte[] controlPLC = new byte[1];
+					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_lamba, true); //Lamba
+					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_piston, true); //Piston
+					S7.SetBitAt(controlPLC, 0, Settings.Default.plc_bos, true); //Lazer
+					result = client.DBWrite(1, 0, 1, controlPLC);
+
+					if(result != 0)
+						port_text.Text = client.ErrorText(result);
+				}
+
+				int qrCounter = 0;
+				int qrErCount = 0;
+				string gelen = "";
+
+				// Fail-closed: OK only when the expected text arrives; timeout or >20 wrong reads stay NOK.
+				while(qrCounter < (int.Parse(Settings.Default.Bekleme.Split('-')[9]) * 10))
+				{
+					capture = true;
+					gelen = txt_qr.Text;
+					if(gelen.Contains(findParts[1])) { hata[c_n, r_n] = false; break; }
+					qrCounter++;
+					if(gelen != "") { qrErCount++; }
+					if(qrErCount > 20) { hata[c_n, r_n] = true; break; }
+					Thread.Sleep(100);
+					Application.DoEvents();
+
+				}
+				txt_qr.Text = "";
 			}
-
-			int qrCounter = 0;
-			int qrErCount = 0;
-			string gelen = "";
-			string find_text = rectString[r_n].Split(',')[10];
-
-			while(qrCounter < (int.Parse(Settings.Default.Bekleme.Split('-')[9]) * 10))
+			catch(Exception exception)
 			{
-				capture = true;
-				gelen = txt_qr.Text;
-				if(gelen.Contains(find_text.Split('-')[1])) break;
-				qrCounter++;
-				if(gelen != "") { qrErCount++; }
-				if(qrErCount > 20) { hata[c_n, r_n] = true; break; }
-				Thread.Sleep(100);
-				Application.DoEvents();
-
+				hata[c_n, r_n] = true;
+				tx_debug.Text = exception.ToString();
 			}
-			txt_qr.Text = "";
 		}
 
 		// Tarama Fonksiyonları Bitiş ------------------------------------------------------------------------------
