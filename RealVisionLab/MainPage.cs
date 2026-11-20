@@ -95,7 +95,7 @@ namespace RealVisionLab
 			islem = false,
 			rotuzunlukvisible = false,
 			gThrs = false,
-			qr = false,
+			qr = false;
 		public static bool[]
 			cam_var;
 		public static bool[,]
@@ -641,8 +641,7 @@ namespace RealVisionLab
 			}
 			catch(Exception ex)
 			{
-				UiLog(ex.ToString() + "
-");
+				UiLog(ex.ToString() + "\r\n");
 			}
 		}
 		private void Uart_connect()
@@ -2745,8 +2744,8 @@ namespace RealVisionLab
 				BeginInvoke((Action)(() => RunUiActionSafe(action)));
 				return true;
 			}
-			catch(InvalidOperationException) { return false; } // handle destroyed meanwhile
 			catch(ObjectDisposedException) { return false; }
+			catch(InvalidOperationException) { return false; } // handle destroyed meanwhile
 		}
 
 		private static void RunUiActionSafe(Action action)

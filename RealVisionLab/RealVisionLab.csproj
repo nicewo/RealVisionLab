@@ -161,6 +161,10 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Config\CameraConfig.cs" />
+    <Compile Include="Config\ConfigParser.cs" />
+    <Compile Include="Config\RoiConfig.cs" />
+    <Compile Include="Config\WaitTimes.cs" />
     <Compile Include="FrameBuffer.cs" />
     <Compile Include="Io\CompositeMachineIo.cs" />
     <Compile Include="Io\IMachineIo.cs" />

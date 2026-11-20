@@ -1784,5 +1784,28 @@ namespace RealVisionLab
         private void Close_Click(object sender, EventArgs e) { Close(); }
         //Pencere Taşıma End
 
+        /// <summary>Sets a NumericUpDown value clamped to its range (an out-of-range stored value must not throw).</summary>
+        private static void SetNud(NumericUpDown nud, decimal value)
+        {
+            if (value < nud.Minimum) value = nud.Minimum;
+            if (value > nud.Maximum) value = nud.Maximum;
+            nud.Value = value;
+        }
+
+        /// <summary>Editor column index -> ROI field: 0 X, 1 Y, 2 Width, 3 Height, 4 MinOffset, 5 MaxOffset, 6 Threshold.</summary>
+        private static int RoiNudValue(RoiConfig roi, int index)
+        {
+            switch (index)
+            {
+                case 0: return roi.X;
+                case 1: return roi.Y;
+                case 2: return roi.Width;
+                case 3: return roi.Height;
+                case 4: return roi.MinOffset;
+                case 5: return roi.MaxOffset;
+                case 6: return roi.Threshold;
+                default: return 0;
+            }
+        }
     }
 }
