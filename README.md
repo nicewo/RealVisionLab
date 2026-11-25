@@ -1,3 +1,11 @@
+<div align="center">
+  <a href="https://myusufgultekin.web.app/"><img src="./assets/myg-project-banner.svg" alt="REAL VISION LAB — MYG Tech" width="100%"></a>
+  <p><img src="https://img.shields.io/badge/C%23-WINDOWS_FORMS-512BD4?style=for-the-badge&logo=csharp&logoColor=white" alt="C sharp"> <img src="https://img.shields.io/badge/COMPUTER-VISION-0891B2?style=for-the-badge" alt="Computer vision"> <img src="https://img.shields.io/badge/PLC-SIEMENS_S7-009999?style=for-the-badge" alt="Siemens S7"></p>
+  <p><a href="https://myusufgultekin.web.app/">MYG TECH</a> · <a href="https://github.com/nicewo">GitHub Profile</a></p>
+</div>
+
+---
+
 # RealVisionLab
 
 **Camera-based industrial visual inspection with machine integration**
